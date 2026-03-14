@@ -333,9 +333,73 @@ export default function EventScreen() {
         </View>
       </View>
 
-      {/* --- 5. CREATOR MODAL --- */}
+      {/* --- 5. CREATOR MODAL: NEW POLL --- */}
       <Modal visible={isModalOpen} animationType="fade" transparent={true}>
-        {/* ... (Your exact same Modal code goes here, completely untouched) ... */}
+        <View className="flex-1 justify-center items-center p-4">
+          
+          {/* 1. The Clickable Background */}
+          <Pressable 
+            className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" 
+            onPress={() => setIsModalOpen(false)} 
+          />
+
+          {/* 2. The Modal Card */}
+          <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-md max-h-[90%] shadow-2xl z-10">
+            
+            {/* --- UPDATED HEADER --- */}
+            <HStack className="justify-between items-center mb-6">
+              <Heading size="xl" className="text-zinc-50">Create a Poll</Heading>
+              
+              {/* Grouped Clear and Cancel buttons together */}
+              <HStack className="gap-2">
+                <Button size="sm" variant="link" onPress={handleClearForm}>
+                  <ButtonText className="text-red-400 font-semibold">Clear</ButtonText>
+                </Button>
+                <Button size="sm" variant="link" onPress={() => setIsModalOpen(false)}>
+                  <ButtonText className="text-zinc-400">Cancel</ButtonText>
+                </Button>
+              </HStack>
+            </HStack>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <VStack className="gap-6 pb-2">
+                
+                <VStack className="gap-2">
+                  <Text className="text-zinc-300 font-bold ml-1">Main Question</Text>
+                  <Input variant="outline" size="xl" className="border-zinc-700">
+                    <InputField placeholder="e.g., What day works best?" placeholderTextColor="#a1a1aa" className="text-zinc-50" value={question} onChangeText={setQuestion} />
+                  </Input>
+                </VStack>
+
+                <HStack className="justify-between items-center bg-zinc-800 p-4 rounded-xl border border-zinc-700">
+                  <VStack>
+                    <Text className="text-zinc-50 font-bold">Allow Multiple Choices</Text>
+                  </VStack>
+                  <Switch value={allowMultiple} onValueChange={setAllowMultiple} trackColor={{ false: "#3f3f46", true: "#2563eb" }} />
+                </HStack>
+
+                <VStack className="gap-3">
+                  <Text className="text-zinc-300 font-bold ml-1">Choices</Text>
+                  {choices.map((choice, index) => (
+                    <Input key={index} variant="outline" size="xl" className="border-zinc-700">
+                      <InputField placeholder={`Option ${index + 1}`} placeholderTextColor="#52525b" className="text-zinc-50" value={choice} onChangeText={(text) => handleUpdateChoice(text, index)} />
+                    </Input>
+                  ))}
+                  
+                  <Button variant="outline" action="secondary" className="border-zinc-700 border-dashed mt-2" onPress={handleAddChoice}>
+                    <ButtonText className="text-zinc-400 font-bold">+ Add Another Option</ButtonText>
+                  </Button>
+                </VStack>
+
+                {/* --- UPDATED BOTTOM --- */}
+                <Button size="xl" action="primary" className="bg-blue-600 border-0 mt-4 mb-4" onPress={handleCreatePoll} isDisabled={!question.trim() || choices.some(c => !c.trim())}>
+                  <ButtonText className="font-bold text-white">Publish Poll</ButtonText>
+                </Button>
+
+              </VStack>
+            </ScrollView>
+          </View>
+        </View>
       </Modal>
 
     </Box>
