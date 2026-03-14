@@ -13,8 +13,8 @@ export default function CreateScreen() {
   const router = useRouter();
 
   return (
-    <Box className="flex-1 bg-zinc-900 justify-center px-8">
-      <VStack className="gap-8">
+    <Box className="flex-1 bg-zinc-900 justify-center items-center px-8">
+      <VStack className="gap-8 items-center w-full max-w-sm">
         <Heading size="2xl" className="text-zinc-50 text-center">What's The Plan?</Heading>
         
         <VStack className="gap-4">

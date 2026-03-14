@@ -1,11 +1,12 @@
-import { doc, getDoc, setDoc, serverTimestamp, arrayUnion } from 'firebase/firestore';
+import { collection, doc, getDocs, setDoc, query, where, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 import { useRouter } from 'expo-router';
 
+// Increased to 8 characters for better security
 const generateCode = () => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 8; i++) {
     code += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return code;
@@ -16,42 +17,43 @@ export const useEvents = () => {
 
   const createNewEvent = async (title: string) => {
     const currentUser = auth.currentUser;
-    if (!currentUser) {
-      console.error("User not authenticated.");
-      return;
-    }
+    if (!currentUser) return;
 
     let isUnique = false;
-    let inviteCode = '';
+    let newJoinCode = '';
 
-    // 1. Generate unique code
+    // 1. Generate code and query Firestore to ensure no other event has it
     while (!isUnique) {
-      inviteCode = generateCode();
-      const docRef = doc(db, 'events', inviteCode);
-      const docSnap = await getDoc(docRef);
-      if (!docSnap.exists()) {
+      newJoinCode = generateCode();
+      const q = query(collection(db, 'events'), where('joinCode', '==', newJoinCode));
+      const querySnapshot = await getDocs(q);
+      if (querySnapshot.empty) {
         isUnique = true;
       }
     }
 
     try {
-      // 2. Create the event document
-      const eventRef = doc(db, 'events', inviteCode);
+      // 2. Let Firestore generate a massive, secure Document ID
+      const eventRef = doc(collection(db, 'events')); 
+      const secureEventId = eventRef.id;
+
+      // 3. Save the event with the joinCode attached as a field
       await setDoc(eventRef, {
         title: title,
+        joinCode: newJoinCode, 
         organizerId: currentUser.uid,
         createdAt: serverTimestamp(),
         status: 'voting'
       });
 
-      // 3. Add this event to the user's personal document in Firestore
+      // 4. Save the SECURE ID to the user's dashboard list, not the short code
       const userRef = doc(db, 'users', currentUser.uid);
       await setDoc(userRef, {
-        joinedEvents: arrayUnion(inviteCode)
-      }, { merge: true }); // merge: true ensures we don't overwrite their displayName if they have one
+        joinedEvents: arrayUnion(secureEventId)
+      }, { merge: true });
 
-      // 4. Route to the new event
-      router.push(`/event/${inviteCode}`);
+      // 5. Route to the secure URL
+      router.push(`/event/${secureEventId}`);
 
     } catch (error) {
       console.error("Error creating event: ", error);
