@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, usePathname } from 'expo-router';
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import { useAuth } from '../hooks/useAuth';
 import { ActivityIndicator, View } from 'react-native';
@@ -11,7 +11,7 @@ export default function RootLayout() {
   const { user, isLoading: isAuthLoading } = useAuth();
   const [isProfileChecking, setIsProfileChecking] = useState(true);
   
-  const segments = useSegments();
+  const pathname = usePathname();
   const router = useRouter();
 
   // THE GLOBAL ROUTE GUARD
@@ -28,15 +28,24 @@ export default function RootLayout() {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         const hasName = userDoc.exists() && userDoc.data().displayName;
         
-        // segments[0] tells us the current top-level route (e.g., 'onboarding', 'event', 'dashboard')
-        const inOnboardingScreen = segments[0] === 'onboarding';
+        const inIndexScreen = pathname === '/'; 
+        const inOnboardingScreen = pathname === '/onboarding';
+        
+        const isIntentionalAction = 
+          pathname === '/create' || 
+          pathname === '/join' || 
+          pathname.startsWith('/event/');
 
-        if (!hasName && !inOnboardingScreen) {
-          // 1. They have no name, and they are trying to view a normal app screen. Intercept!
-          router.replace('/onboarding');
-        } else if (hasName && inOnboardingScreen) {
-          // 2. They already have a name, but are trying to view the onboarding screen. Kick them out!
-          router.replace('/dashboard');
+        if (hasName) {
+          if (inIndexScreen || inOnboardingScreen) {
+            router.replace('/dashboard');
+          }
+        } else {
+          if (isIntentionalAction) {
+            router.replace(`/onboarding?next=${pathname}`);
+          } else if (!inIndexScreen && !inOnboardingScreen) {
+            router.replace('/');
+          }
         }
       } catch (error) {
         console.error("Error checking global profile:", error);
@@ -46,7 +55,7 @@ export default function RootLayout() {
     };
 
     checkUserProfile();
-  }, [user, isAuthLoading, segments]);
+  }, [user, isAuthLoading, pathname]);
 
   // Block the UI from rendering until BOTH Firebase Auth and the Profile Check are done
   if (isAuthLoading || isProfileChecking) {

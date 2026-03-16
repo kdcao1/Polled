@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/rakshitnaidu/Documents/Polled -name \"*provider*\" -type f 2>/dev/null | grep -v node_modules)"
+    ]
+  }
+}

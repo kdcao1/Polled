@@ -1,20 +1,27 @@
-import { useState, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 import { useFocusEffect } from 'expo-router';
-import { useCallback } from 'react';
+
+export interface PollSummary {
+  totalPolls: number;
+  totalVotes: number;
+  topPolls: { question: string; topChoice: string; topVotes: number; totalVotes: number }[];
+}
 
 export interface EventData {
   id: string;
   title: string;
   status: string;
+  joinCode?: string;
+  organizerId?: string;
+  summary?: PollSummary;
 }
 
 export const useDashboard = () => {
   const [events, setEvents] = useState<EventData[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // useFocusEffect ensures it re-fetches every time they navigate back to the dashboard
   useFocusEffect(
     useCallback(() => {
       const fetchEvents = async () => {
@@ -26,13 +33,11 @@ export const useDashboard = () => {
         }
 
         try {
-          // 1. Get the user's saved list of invite codes
           const userDoc = await getDoc(doc(db, 'users', user.uid));
-          
+
           if (userDoc.exists()) {
             const joinedEvents = userDoc.data().joinedEvents || [];
 
-            // 2. Fetch the actual title and status for each of those codes
             const eventPromises = joinedEvents.map(async (eventId: string) => {
               const eventDoc = await getDoc(doc(db, 'events', eventId));
               if (eventDoc.exists()) {
@@ -42,8 +47,6 @@ export const useDashboard = () => {
             });
 
             const eventResults = await Promise.all(eventPromises);
-            
-            // 3. Filter out any dead links and save to state
             setEvents(eventResults.filter(e => e !== null) as EventData[]);
           }
         } catch (error) {
@@ -57,5 +60,9 @@ export const useDashboard = () => {
     }, [])
   );
 
-  return { events, loading };
+  const removeEvent = (eventId: string) => {
+    setEvents((prev) => prev.filter((e) => e.id !== eventId));
+  };
+
+  return { events, loading, removeEvent };
 };
