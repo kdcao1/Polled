@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Stack, useRouter, usePathname, useLocalSearchParams } from 'expo-router';
+import { Stack, useRouter, usePathname, useGlobalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import { useAuth } from '../hooks/useAuth';
@@ -13,6 +13,7 @@ export default function RootLayout() {
   const [isProfileChecking, setIsProfileChecking] = useState(true);
   
   const pathname = usePathname();
+  const params = useGlobalSearchParams();
   const router = useRouter();
 
   // THE GLOBAL ROUTE GUARD
@@ -31,6 +32,15 @@ export default function RootLayout() {
         
         const inIndexScreen = pathname === '/'; 
         const inOnboardingScreen = pathname === '/onboarding';
+
+        const serializedParams = new URLSearchParams(
+          Object.entries(params).flatMap(([key, value]) => {
+            if (value == null) return [];
+            if (Array.isArray(value)) return value.map((item) => [key, String(item)]);
+            return [[key, String(value)]];
+          })
+        ).toString();
+        const nextPath = serializedParams ? `${pathname}?${serializedParams}` : pathname;
         
         const isIntentionalAction = 
           pathname === '/create' || 
@@ -43,7 +53,7 @@ export default function RootLayout() {
           }
         } else {
           if (isIntentionalAction) {
-            router.replace(`/onboarding?next=${pathname}`);
+            router.replace(`/onboarding?next=${encodeURIComponent(nextPath)}`);
           } else if (!inIndexScreen && !inOnboardingScreen) {
             router.replace('/');
           }
@@ -56,7 +66,7 @@ export default function RootLayout() {
     };
 
     checkUserProfile();
-  }, [user, isAuthLoading, pathname]);
+  }, [user, isAuthLoading, pathname, JSON.stringify(params)]);
 
   // Block the UI from rendering until BOTH Firebase Auth and the Profile Check are done
   if (isAuthLoading || isProfileChecking) {

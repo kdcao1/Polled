@@ -15,8 +15,10 @@ export interface EventData {
   time: string,
   location: string,
   status: string;
+  description?: string;
   joinCode?: string;
   organizerId?: string;
+  headcount?: number;
   summary?: PollSummary;
 }
 
