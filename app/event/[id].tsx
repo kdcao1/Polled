@@ -54,12 +54,31 @@ function PollModal({
   const [question, setQuestion] = useState('');
   const [choices, setChoices] = useState<string[]>(['', '']);
   const [allowMultiple, setAllowMultiple] = useState(false);
+  
+  // Add this new state for the custom dropdown
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  
+  // No longer allows null; defaults to 24 hours
+  const [durationHours, setDurationHours] = useState<number>(24);
+
+  const DURATION_OPTIONS = [
+    { label: '1 Hour', value: 1 },
+    { label: '2 Hours', value: 2 },
+    { label: '6 Hours', value: 6 },
+    { label: '12 Hours', value: 12 },
+    { label: '1 Day', value: 24 },
+    { label: '2 Days', value: 48 },
+    { label: '3 Days', value: 72 },
+    { label: '1 Week', value: 168 },
+  ];
 
   useEffect(() => {
     if (initialQuestion) {
       setQuestion(initialQuestion);
       setChoices(initialChoices && initialChoices.length > 0 ? initialChoices : ['', '']);
       setAllowMultiple(false);
+      setIsDropdownOpen(false);
+      setDurationHours(24);
     }
   }, [initialQuestion, initialChoices]);
 
@@ -67,6 +86,8 @@ function PollModal({
     setQuestion('');
     setChoices(['', '']);
     setAllowMultiple(false);
+    setDurationHours(24);
+    setIsDropdownOpen(false);
   };
 
   const handleAddChoice = () => setChoices([...choices, '']);
@@ -81,12 +102,18 @@ function PollModal({
     if (!question.trim() || choices.some((c) => !c.trim())) return;
     try {
       const pollsRef = collection(db, 'events', eventId, 'polls');
+      
+      // Calculate the exact expiration Date object
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + durationHours);
+
       await addDoc(pollsRef, {
         question: question.trim(),
         allowMultiple,
         options: choices.map((c) => ({ text: c.trim(), voterIds: [] })),
         createdAt: serverTimestamp(),
         status: 'active',
+        expiresAt: expiresAt,
       });
       
       handleClearForm(); 
@@ -141,6 +168,46 @@ function PollModal({
                 />
               </HStack>
 
+              {/* Poll Duration Dropdown */}
+              <VStack className="gap-2 mt-2">
+                <Text className="text-zinc-300 font-bold ml-1">Poll Duration</Text>
+                
+                <TouchableOpacity 
+                  activeOpacity={0.7}
+                  className="bg-zinc-800 border border-zinc-700 rounded-xl p-4 flex-row justify-between items-center"
+                  onPress={() => setIsDropdownOpen(!isDropdownOpen)}
+                >
+                  <Text className="text-zinc-50 font-medium text-base">
+                    {DURATION_OPTIONS.find(opt => opt.value === durationHours)?.label}
+                  </Text>
+                  <Text className="text-zinc-400 text-xs">
+                    {isDropdownOpen ? '▲' : '▼'}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Dropdown Menu Items */}
+                {isDropdownOpen && (
+                  <View className="bg-zinc-800 border border-zinc-700 rounded-xl overflow-hidden mt-1 max-h-48">
+                    <ScrollView nestedScrollEnabled={true}>
+                      {DURATION_OPTIONS.map((option) => (
+                        <TouchableOpacity
+                          key={option.value}
+                          className={`p-4 border-b border-zinc-700/50 ${durationHours === option.value ? 'bg-zinc-700' : ''}`}
+                          onPress={() => {
+                            setDurationHours(option.value);
+                            setIsDropdownOpen(false);
+                          }}
+                        >
+                          <Text className={`font-medium ${durationHours === option.value ? 'text-blue-400' : 'text-zinc-300'}`}>
+                            {option.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </VStack>
+
               <VStack className="gap-3">
                 <Text className="text-zinc-300 font-bold ml-1">Choices</Text>
                 {choices.map((choice, index) => (
@@ -180,6 +247,21 @@ function PollModal({
     </Modal>
   );
 }
+
+const formatTimeLeft = (expirationDate: Date) => {
+  const diffMs = expirationDate.getTime() - new Date().getTime();
+  if (diffMs <= 0) return 'Ended';
+
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  const days = Math.floor(diffMins / (60 * 24));
+  const hours = Math.floor((diffMins % (60 * 24)) / 60);
+  const minutes = diffMins % 60;
+
+  if (days > 0) return `Ends in ${days}d ${hours}h`;
+  if (hours > 0) return `Ends in ${hours}h ${minutes}m`;
+  if (minutes > 0) return `Ends in ${minutes}m`;
+  return 'Ends in < 1m';
+};
 
 // ---------------------------------------------------------------------------
 // Main screen
@@ -259,6 +341,15 @@ export default function EventScreen() {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
 
+    const poll = polls.find(p => p.id === pollId);
+    if (poll?.expiresAt) {
+      const expirationDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt);
+      if (new Date() > expirationDate) {
+        alert('This poll has ended.');
+        return;
+      }
+    }
+
     const newOptions = currentOptions.map((opt) => ({
       ...opt,
       voterIds: [...opt.voterIds],
@@ -321,31 +412,78 @@ export default function EventScreen() {
   // Unified Poll Card (Displays Results visually if showResults=true)
   // -------------------------------------------------------------------------
   const PollCard = ({ poll, compact = false, deletable = false, showResults = false }: { poll: any; compact?: boolean; deletable?: boolean; showResults?: boolean; }) => {
-    // Calculate total votes for percentage logic
     const totalVotes = poll.options.reduce((s: number, o: any) => s + o.voterIds.length, 0);
 
+    // Extract expiration date safely
+    const expiresAtDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : (poll.expiresAt ? new Date(poll.expiresAt) : null);
+    
+    // Set up local state for the live timer
+    const [isExpired, setIsExpired] = useState(() => expiresAtDate ? new Date() > expiresAtDate : false);
+    const [timeLeft, setTimeLeft] = useState(() => expiresAtDate && !isExpired ? formatTimeLeft(expiresAtDate) : '');
+
+    // Live countdown effect: updates every 60 seconds
+    useEffect(() => {
+      if (!expiresAtDate || isExpired) return;
+
+      const interval = setInterval(() => {
+        if (new Date() > expiresAtDate) {
+          setIsExpired(true);
+          clearInterval(interval);
+        } else {
+          setTimeLeft(formatTimeLeft(expiresAtDate));
+        }
+      }, 60000); // 60,000ms = 1 minute
+
+      return () => clearInterval(interval);
+    }, [expiresAtDate, isExpired]);
+
+    // Force results to show if expired
+    const displayResults = showResults || isExpired;
+
     return (
-      <VStack className={`bg-zinc-800 rounded-xl border border-zinc-700 gap-2 ${compact ? 'p-4 opacity-80' : 'p-5 gap-4'}`}>
+      <VStack className={`bg-zinc-800 rounded-xl border ${isExpired ? 'border-zinc-700/50 opacity-80' : 'border-zinc-700'} gap-2 ${compact ? 'p-4' : 'p-5 gap-4'}`}>
         <HStack className="justify-between items-start">
           <VStack className={`flex-1 ${compact ? 'gap-0.5' : 'gap-1'}`}>
-            <Text className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}>
-              {poll.question}
-            </Text>
-            {poll.allowMultiple && (
+            <HStack className="items-center gap-2 mb-1 flex-wrap">
+              <Text className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}>
+                {poll.question}
+              </Text>
+            </HStack>
+            
+            {poll.allowMultiple && !isExpired && (
               <Text className={`text-blue-400 font-semibold uppercase tracking-wider ${compact ? 'text-[10px]' : 'text-xs'}`}>
                 Select Multiple
               </Text>
             )}
           </VStack>
-          {deletable && (
-            <TouchableOpacity
-              onPress={() => handleDeletePoll(poll.id)}
-              className="ml-3 mt-0.5 bg-zinc-700 rounded-lg px-2 py-1 active:bg-red-900/50"
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text className="text-zinc-400 text-xs font-semibold">Delete</Text>
-            </TouchableOpacity>
-          )}
+          
+          {/* RIGHT SIDE: Badges and Delete button tightly grouped */}
+          <HStack className="items-center gap-3 shrink-0">
+            {/* EXPIRED BADGE */}
+            {isExpired && (
+              <Box className="bg-red-500/20 px-2 py-1 rounded border border-red-500 justify-center">
+                <Text className="text-red-400 text-xs font-bold uppercase tracking-wider leading-none">Ended</Text>
+              </Box>
+            )}
+            
+            {/* LIVE TIMER BADGE */}
+            {!isExpired && expiresAtDate && (
+              <Box className="bg-blue-900/30 px-2 py-1 rounded border border-blue-800/50 justify-center">
+                <Text className="text-blue-400 text-xs font-bold uppercase tracking-wider leading-none">{timeLeft}</Text>
+              </Box>
+            )}
+
+            {/* DELETE BUTTON */}
+            {deletable && (
+              <TouchableOpacity
+                onPress={() => handleDeletePoll(poll.id)}
+                className="bg-red-900/30 border border-red-800/50 rounded-lg px-3 py-1 active:bg-red-900/60 justify-center"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text className="text-red-400 text-xs font-semibold leading-none">Delete</Text>
+              </TouchableOpacity>
+            )}
+          </HStack>
         </HStack>
 
         <VStack className={compact ? 'gap-1.5 mt-1' : 'gap-2 mt-2'}>
@@ -357,12 +495,12 @@ export default function EventScreen() {
             return (
               <TouchableOpacity
                 key={index}
-                activeOpacity={0.7}
+                activeOpacity={isExpired ? 1 : 0.7} // Disable click animation if expired
+                disabled={isExpired} // Block voting touches entirely
                 onPress={() => handleVote(poll.id, index, poll.options, poll.allowMultiple)}
                 className={`rounded-lg border overflow-hidden relative ${compact ? 'p-3' : 'p-4'} ${hasVoted ? 'bg-blue-900/40 border-blue-500' : 'bg-zinc-900/50 border-zinc-700'}`}
               >
-                {/* Embedded Progress Bar for Results */}
-                {showResults && (
+                {displayResults && (
                   <View 
                     className={`absolute top-0 bottom-0 left-0 ${hasVoted ? 'bg-blue-600/30' : 'bg-zinc-700/50'}`} 
                     style={{ width: `${pct}%` }} 
@@ -374,7 +512,7 @@ export default function EventScreen() {
                     {option.text}
                   </Text>
                   <Text className={`font-bold ${compact ? 'text-xs' : 'text-sm'} ${hasVoted ? 'text-blue-400' : 'text-zinc-500'}`}>
-                    {showResults ? `${pct}% (${voteCount})` : `${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}`}
+                    {displayResults ? `${pct}% (${voteCount})` : `${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}`}
                   </Text>
                 </HStack>
               </TouchableOpacity>
@@ -400,7 +538,13 @@ export default function EventScreen() {
 
   const Header = () => (
     <VStack className="gap-2 mb-6">
-      <Button variant="link" onPress={() => router.replace('/dashboard')} className="self-start p-0 mb-1">
+      <Button variant="link" onPress={() => {if (router.canGoBack()) {
+          router.back(); 
+        } else {
+          router.replace('/dashboard');
+        }}} 
+        className="self-start p-0 mb-1"
+      >
         <ButtonText className="text-blue-500">← Back</ButtonText>
       </Button>
 
@@ -554,12 +698,54 @@ export default function EventScreen() {
                   </Box>
                 ) : (
                   // showResults=true embeds the visual progress bars inside the Answered cards
-                  answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults />)
+                  answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults deletable={isOrganizer} />)
                 )
               )}
             </VStack>
           </ScrollView>
         </View>
+
+        {/* --- ADD THE QR MODAL HERE FOR MOBILE --- */}
+        <Modal visible={isQRModalOpen} animationType="fade" transparent>
+          <View className="flex-1 justify-center items-center p-4">
+            <Pressable
+              className="absolute top-0 bottom-0 left-0 right-0 bg-black/80"
+              onPress={() => setIsQRModalOpen(false)}
+            />
+            <View className="bg-zinc-900 rounded-3xl p-8 border border-zinc-800 items-center shadow-2xl z-10 w-full max-w-[320px]">
+              <Heading size="xl" className="text-zinc-50 mb-1 text-center">Scan to Join</Heading>
+              <Text className="text-zinc-400 mb-8 text-center" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
+                {eventData?.title}
+              </Text>
+              
+              <View className="bg-white p-4 rounded-2xl mb-6 min-h-[232px] min-w-[232px] justify-center items-center">
+                 {joinLink ? (
+                   <QRCode 
+                     value={joinLink} 
+                     size={200} 
+                     backgroundColor="white"
+                     color="black"
+                   />
+                 ) : (
+                   <Text className="text-zinc-400">Loading QR...</Text>
+                 )}
+              </View>
+
+              <Text className="text-zinc-500 font-mono tracking-widest font-bold mb-6">
+                CODE: {eventData?.joinCode}
+              </Text>
+
+              <Button
+                size="md"
+                variant="outline"
+                className="border-zinc-700 w-full bg-zinc-800"
+                onPress={() => setIsQRModalOpen(false)}
+              >
+                <ButtonText className="text-zinc-300 font-bold">Close</ButtonText>
+              </Button>
+            </View>
+          </View>
+        </Modal>
 
         <PollModal visible={isModalOpen} eventId={id as string} onClose={() => setIsModalOpen(false)} />
       </Box>
@@ -614,7 +800,7 @@ export default function EventScreen() {
                   </Box>
                 ) : (
                   // showResults=true embeds the visual progress bars inside the Answered cards
-                  answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults />)
+                  answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults deletable={isOrganizer}/>)
                 )}
               </VStack>
             </ScrollView>

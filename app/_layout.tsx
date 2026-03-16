@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Stack, useRouter, usePathname } from 'expo-router';
+import { Stack, useRouter, usePathname, useLocalSearchParams } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import { useAuth } from '../hooks/useAuth';
 import { ActivityIndicator, View } from 'react-native';
@@ -68,21 +69,24 @@ export default function RootLayout() {
 
   return (
     <GluestackUIProvider mode="dark">
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: '#18181b' },
-          headerTintColor: '#f4f4f5',
-          headerShadowVisible: false,
-          contentStyle: { backgroundColor: '#18181b' },
-        }}
-      >
-        <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="dashboard" options={{ headerShown: false }} />
-        <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-        <Stack.Screen name="create" options={{ title: 'New Event' }} />
-        <Stack.Screen name="join" options={{ title: 'Join Event' }} />
-        <Stack.Screen name="event/[id]" options={{ title: 'Polled', headerLeft: () => null }} />
-      </Stack>
+      <SafeAreaView className="flex-1 bg-zinc-900">
+        <Stack
+          screenOptions={{
+            headerStyle: { backgroundColor: '#18181b' },
+            headerTintColor: '#f4f4f5',
+            headerShown: false,
+            headerShadowVisible: false,
+            contentStyle: { backgroundColor: '#18181b' },
+          }}
+        >
+          <Stack.Screen name="index" options={{ headerShown: false }} />
+          <Stack.Screen name="dashboard" options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+          <Stack.Screen name="create" options={{ title: 'New Event', presentation: 'modal' }} />
+          <Stack.Screen name="join" options={{ title: 'Join Event', presentation: 'modal' }} />
+          <Stack.Screen name="event/[id]" options={{ title: 'Polled', headerLeft: () => null }} />
+        </Stack>
+      </SafeAreaView>
     </GluestackUIProvider>
   );
 }

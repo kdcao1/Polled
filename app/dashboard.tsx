@@ -126,7 +126,7 @@ export default function DashboardScreen() {
               {events.map((event) => (
                 <TouchableOpacity
                   key={event.id}
-                  onPress={() => router.push(`/event/${event.id}`)}
+                  onPress={() => router.navigate(`/event/${event.id}`)}
                   className="bg-zinc-800 p-5 rounded-2xl border border-zinc-700 active:bg-zinc-700"
                 >
                   <VStack className="gap-4">

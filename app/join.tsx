@@ -7,6 +7,7 @@ import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter } from 'expo-router';
 import { collection, query, where, getDocs, doc, setDoc, arrayUnion } from 'firebase/firestore';
+import { KeyboardAvoidingView, Platform } from 'react-native';
 import { db, auth } from '../config/firebaseConfig';
 
 export default function JoinScreen() {
@@ -54,47 +55,63 @@ export default function JoinScreen() {
   };
 
   return (
-    <Box className="flex-1 bg-zinc-900 justify-center items-center px-8">
-      <VStack className="gap-8 w-full max-w-sm">
-        <Heading size="2xl" className="text-zinc-50 text-center">Enter Invite Code</Heading>
-        
-        <VStack className="gap-4">
-          <Input variant="outline" size="xl" className="border-zinc-700">
-            <InputField
-              placeholder="e.g., XJ42K9A1"
-              maxLength={8}
-              placeholderTextColor="#a1a1aa"
-              value={joinCode}
-              onChangeText={(text) => {
-                setJoinCode(text);
-                setErrorMsg(''); 
-              }}
-              autoCapitalize="characters"
-              className="text-zinc-50"
-              autoFocus
-            />
-          </Input>
+    <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+          style={{ flex: 1 }}
+    >
+      <Box className="flex-1 bg-zinc-900 justify-center items-center px-8">
+        <VStack className="gap-8 w-full max-w-sm">
 
-          {/* Display error message if the code is wrong */}
-          {errorMsg ? <Text className="text-red-400 text-center font-semibold">{errorMsg}</Text> : null}
-          
-          <Button 
-            size="xl" 
-            action="primary" 
-            className="bg-blue-600 border-0" 
-            onPress={handleJoin}
-            isDisabled={isJoining || joinCode.length < 5}
+          <Button variant="link" onPress={() => {if (router.canGoBack()) {
+              router.back(); 
+            } else {
+              router.replace('/dashboard');
+            }}}
+            className="self-start p-0 mb-1"
           >
-            <ButtonText className="font-bold text-white">
-              {isJoining ? "Searching..." : "Join Event"}
-            </ButtonText>
+            <ButtonText className="text-blue-500">← Back</ButtonText>
           </Button>
 
-          <Button size="xl" variant="link" onPress={() => router.back()} isDisabled={isJoining}>
-            <ButtonText className="text-zinc-400">Cancel</ButtonText>
-          </Button>
+          <Heading size="2xl" className="text-zinc-50 text-center">Enter Invite Code</Heading>
+          
+          <VStack className="gap-4">
+            <Input variant="outline" size="xl" className="border-zinc-700">
+              <InputField
+                placeholder="e.g., XJ42K9A1"
+                maxLength={8}
+                placeholderTextColor="#a1a1aa"
+                value={joinCode}
+                onChangeText={(text) => {
+                  setJoinCode(text);
+                  setErrorMsg(''); 
+                }}
+                autoCapitalize="characters"
+                className="text-zinc-50"
+                autoFocus
+              />
+            </Input>
+
+            {/* Display error message if the code is wrong */}
+            {errorMsg ? <Text className="text-red-400 text-center font-semibold">{errorMsg}</Text> : null}
+            
+            <Button 
+              size="xl" 
+              action="primary" 
+              className="bg-blue-600 border-0" 
+              onPress={handleJoin}
+              isDisabled={isJoining || joinCode.length < 5}
+            >
+              <ButtonText className="font-bold text-white">
+                {isJoining ? "Searching..." : "Join Event"}
+              </ButtonText>
+            </Button>
+
+            <Button size="xl" variant="link" onPress={() => router.back()} isDisabled={isJoining}>
+              <ButtonText className="text-zinc-400">Cancel</ButtonText>
+            </Button>
+          </VStack>
         </VStack>
-      </VStack>
-    </Box>
+      </Box>
+    </KeyboardAvoidingView>
   );
 }
