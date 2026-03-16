@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   useWindowDimensions,
   Pressable,
+  Share,
+  Platform
 } from 'react-native';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
@@ -28,6 +30,8 @@ import {
   deleteDoc,
 } from 'firebase/firestore';
 import { db, auth } from '../../config/firebaseConfig';
+import QRCode from 'react-native-qrcode-svg';
+import * as Clipboard from 'expo-clipboard';
 
 // ---------------------------------------------------------------------------
 // PollModal — Cleaned up to no longer require initial templates
@@ -44,21 +48,21 @@ function PollModal({
   visible, 
   eventId, 
   onClose, 
-  initialQuestion = '', 
-  initialChoices = ['', ''] 
+  initialQuestion, 
+  initialChoices 
 }: PollModalProps) {
-  const [question, setQuestion] = useState(initialQuestion);
-  const [choices, setChoices] = useState<string[]>(initialChoices);
+  const [question, setQuestion] = useState('');
+  const [choices, setChoices] = useState<string[]>(['', '']);
   const [allowMultiple, setAllowMultiple] = useState(false);
 
-  // Reset form each time the modal opens using the passed-in props
   useEffect(() => {
-    if (visible) {
+    // Only overwrite the form if a pre-filled question was passed in
+    if (initialQuestion) {
       setQuestion(initialQuestion);
-      setChoices(initialChoices);
+      setChoices(initialChoices && initialChoices.length > 0 ? initialChoices : ['', '']);
       setAllowMultiple(false);
     }
-  }, [visible, initialQuestion, initialChoices]);
+  }, [initialQuestion, initialChoices]);
 
   const handleClearForm = () => {
     setQuestion('');
@@ -85,6 +89,8 @@ function PollModal({
         createdAt: serverTimestamp(),
         status: 'active',
       });
+      
+      handleClearForm(); // <-- Add this here so it's fresh for the next poll
       onClose();
     } catch (error) {
       console.error('Error creating poll:', error);
@@ -198,6 +204,29 @@ export default function EventScreen() {
   const openModal = (question = '', choices = ['', '']) => {
     setModalConfig({ question, choices });
     setIsModalOpen(true);
+  };
+
+  const [isQRModalOpen, setIsQRModalOpen] = useState(false);
+
+  // Construct the join link (adjust the domain to match your actual routing)
+  const joinLink = eventData?.joinCode 
+    ? `https://polled.app/join/${eventData.joinCode}` 
+    : `https://polled.app/join/${id}`;
+
+  const handleCopyLink = async () => {
+    await Clipboard.setStringAsync(joinLink);
+    // Optional: Add a toast notification here if you have one configured
+    alert('Join link copied to clipboard!'); 
+  };
+
+  const handleShare = async () => {
+    try {
+      await Share.share({
+        message: `Join my event "${eventData?.title}" on Polled!\nCode: ${eventData?.joinCode}\n${joinLink}`,
+      });
+    } catch (error) {
+      console.error('Error sharing event:', error);
+    }
   };
 
   // Real-time listener — event doc
@@ -384,6 +413,7 @@ export default function EventScreen() {
           <Heading size={isMobile ? '2xl' : '3xl'} className="text-zinc-50">
             {eventData?.title}
           </Heading>
+          
           <HStack className="items-center gap-2 mt-2">
             <Text className="text-zinc-400">Join Code:</Text>
             <Box className="bg-zinc-800 px-3 py-1 rounded-md border border-zinc-700">
@@ -391,6 +421,24 @@ export default function EventScreen() {
                 {eventData?.joinCode}
               </Text>
             </Box>
+          </HStack>
+
+          {/* NEW: Copy Link and QR Code Buttons */}
+          <HStack className="items-center gap-4 mt-3">
+             <TouchableOpacity onPress={handleCopyLink} className="flex-row items-center gap-1.5 active:opacity-70">
+               <Text className="text-blue-400 font-semibold text-sm">Copy Share Link</Text>
+             </TouchableOpacity>
+             
+             <TouchableOpacity onPress={() => setIsQRModalOpen(true)} className="flex-row items-center gap-1.5 active:opacity-70">
+               <Text className="text-blue-400 font-semibold text-sm">Show QR Code</Text>
+             </TouchableOpacity>
+
+              {/* Native Share Button - Mobile Only */}
+              {Platform.OS !== 'web' && isMobile && (
+                <TouchableOpacity onPress={handleShare} className="flex-row items-center gap-1.5 active:opacity-70">
+                  <Text className="text-blue-400 font-semibold text-sm">Share</Text>
+                </TouchableOpacity>
+              )}
           </HStack>
         </VStack>
 
@@ -576,6 +624,49 @@ export default function EventScreen() {
 
         </View>
       </View>
+      
+      {/* QR Code Modal */}
+      <Modal visible={isQRModalOpen} animationType="fade" transparent>
+        <View className="flex-1 justify-center items-center p-4">
+          <Pressable
+            className="absolute top-0 bottom-0 left-0 right-0 bg-black/80"
+            onPress={() => setIsQRModalOpen(false)}
+          />
+          <View className="bg-zinc-900 rounded-3xl p-8 border border-zinc-800 items-center shadow-2xl z-10 w-full max-w-[320px]">
+            <Heading size="xl" className="text-zinc-50 mb-1 text-center">Scan to Join</Heading>
+            <Text className="text-zinc-400 mb-8 text-center" numberOfLines={2}>
+              {eventData?.title}
+            </Text>
+            
+            <View className="bg-white p-4 rounded-2xl mb-6 min-h-[232px] min-w-[232px] justify-center items-center">
+               {/* Only render when joinLink is absolutely ready */}
+               {joinLink ? (
+                 <QRCode 
+                   value={joinLink} 
+                   size={200} 
+                   backgroundColor="white"
+                   color="black"
+                 />
+               ) : (
+                 <Text className="text-zinc-400">Loading QR...</Text>
+               )}
+            </View>
+
+            <Text className="text-zinc-500 font-mono tracking-widest font-bold mb-6">
+              CODE: {eventData?.joinCode}
+            </Text>
+
+            <Button
+              size="md"
+              variant="outline"
+              className="border-zinc-700 w-full bg-zinc-800"
+              onPress={() => setIsQRModalOpen(false)}
+            >
+              <ButtonText className="text-zinc-300 font-bold">Close</ButtonText>
+            </Button>
+          </View>
+        </View>
+      </Modal>
 
       <PollModal 
         visible={isModalOpen} 
