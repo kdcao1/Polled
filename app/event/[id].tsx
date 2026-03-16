@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   ScrollView,
@@ -7,7 +7,7 @@ import {
   useWindowDimensions,
   Pressable,
   Share,
-  Platform
+  Platform,
 } from 'react-native';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
@@ -186,7 +186,7 @@ function PollModal({
                 </TouchableOpacity>
 
                 {/* Dropdown Menu Items */}
-                {isDropdownOpen && (
+                {Platform.OS === 'web' && isDropdownOpen && (
                   <View className="bg-zinc-800 border border-zinc-700 rounded-xl overflow-hidden mt-1 max-h-48">
                     <ScrollView nestedScrollEnabled={true}>
                       {DURATION_OPTIONS.map((option) => (
@@ -243,7 +243,69 @@ function PollModal({
             </VStack>
           </ScrollView>
         </View>
+
+        {/* --- REFINED NATIVE-STYLE BOTTOM SHEET OVERLAY --- */}
+        {Platform.OS !== 'web' && isDropdownOpen && (
+          <View className="absolute top-0 bottom-0 left-0 right-0 justify-end z-50">
+            {/* Dark background click-to-close */}
+            <Pressable 
+              className="absolute top-0 bottom-0 left-0 right-0 bg-black/70" 
+              onPress={() => setIsDropdownOpen(false)} 
+            />
+            
+            {/* Bottom Sheet Container */}
+            <View className="bg-[#1c1c1e] rounded-t-[32px] pt-3 pb-10 px-4 shadow-2xl w-full max-w-md self-center">
+              
+              {/* Drag Handle */}
+              <View className="w-10 h-1.5 bg-zinc-600 rounded-full self-center mb-6" />
+              
+              <Text className="text-zinc-300 font-bold text-sm mb-3 ml-2 tracking-wide">
+                Poll Duration
+              </Text>
+              
+              {/* Encapsulated List Group */}
+              <View className="bg-zinc-800 rounded-2xl overflow-hidden">
+                <ScrollView className="max-h-96" showsVerticalScrollIndicator={false}>
+                  {DURATION_OPTIONS.map((option, index) => {
+                    const isSelected = durationHours === option.value;
+                    const isLast = index === DURATION_OPTIONS.length - 1;
+                    
+                    return (
+                      <TouchableOpacity
+                        key={option.value}
+                        activeOpacity={0.7}
+                        className={`flex-row justify-between items-center p-5 ${!isLast ? 'border-b border-zinc-700/50' : ''}`}
+                        onPress={() => {
+                          setDurationHours(option.value);
+                          // A tiny delay lets the user see the radio button fill before closing!
+                          setTimeout(() => setIsDropdownOpen(false), 200); 
+                        }}
+                      >
+                        <Text className={`text-base ${isSelected ? 'text-zinc-50 font-medium' : 'text-zinc-300'}`}>
+                          {option.label}
+                        </Text>
+                        
+                        {/* Custom Radio Button */}
+                        <View 
+                          className={`w-6 h-6 rounded-full border-2 items-center justify-center ${
+                            isSelected ? 'border-indigo-500' : 'border-zinc-500'
+                          }`}
+                        >
+                          {isSelected && (
+                            <View className="w-3 h-3 rounded-full bg-indigo-500" />
+                          )}
+                        </View>
+                        
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+          </View>
+        )}
       </View>
+
     </Modal>
   );
 }
