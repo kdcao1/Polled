@@ -5,7 +5,7 @@ import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 
@@ -13,22 +13,25 @@ export default function OnboardingScreen() {
   const [name, setName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const router = useRouter();
+  const { next } = useLocalSearchParams();
 
   const handleSaveName = async () => {
     if (!name.trim() || !auth.currentUser) return;
     
     setIsSaving(true);
     try {
-      // Save the name to their invisible Firebase profile document
       const userRef = doc(db, 'users', auth.currentUser.uid);
       await setDoc(userRef, {
         displayName: name.trim(),
-        // We initialize joinedEvents here just in case!
         joinedEvents: [] 
       }, { merge: true });
 
-      // Once saved, push them to the Dashboard!
-      router.replace('/dashboard');
+      if (typeof next === 'string') {
+        router.replace(next as any);
+      } else {
+        router.replace('/dashboard');
+      }
+
     } catch (error) {
       console.error("Error saving name:", error);
       setIsSaving(false);
