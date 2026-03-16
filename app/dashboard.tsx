@@ -11,22 +11,6 @@ import { doc, deleteDoc, updateDoc, arrayRemove } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 import { useDashboard, EventData } from '../hooks/useDashboard';
 
-
-const statusLabelMap: Record<string, string> = {
-  draft: 'Needs polls',
-  voting: 'Getting votes',
-  closing_soon: 'Closing soon',
-  completed: 'Completed',
-};
-
-const statusColorMap: Record<string, string> = {
-  draft: 'text-zinc-400',
-  voting: 'text-green-400',
-  closing_soon: 'text-amber-400',
-  completed: 'text-zinc-300',
-};
-
-
 function EventSummaryBadge({ event }: { event: EventData }) {
   const { summary } = event;
   if (!summary || summary.totalPolls === 0) return null;
@@ -150,11 +134,6 @@ export default function DashboardScreen() {
                     <HStack className="justify-between items-start">
                       <VStack className="flex-1 mr-3 gap-1">
                         <Text className="text-zinc-50 font-bold text-xl">{event.title}</Text>
-                        {!!event.description && (
-                          <Text className="text-zinc-400 text-sm mt-1" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
-                            {event.description}
-                          </Text>
-                        )}
                         <HStack className="items-center gap-2 mt-1">
                           <Text className="text-zinc-400 text-sm font-medium">Code:</Text>
                           <Box className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-700">
@@ -183,8 +162,8 @@ export default function DashboardScreen() {
                     <VStack className="gap-2 bg-zinc-900/30 p-3 rounded-xl border border-zinc-700/50">
                       <HStack className="justify-between items-center">
                         <Text className="text-zinc-400 text-sm font-medium">Status</Text>
-                        <Text className={`text-sm font-bold ${statusColorMap[event.status] || 'text-zinc-300'}`}>
-                          {statusLabelMap[event.status] || 'Getting votes'}
+                        <Text className={`text-sm font-bold ${event.status === 'voting' ? 'text-green-400' : 'text-zinc-500'}`}>
+                          {event.status === 'voting' ? 'Active' : 'Closed'}
                         </Text>
                       </HStack>
                       

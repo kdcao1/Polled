@@ -27,7 +27,7 @@ export default function OnboardingScreen() {
       }, { merge: true });
 
       if (typeof next === 'string') {
-        router.replace(decodeURIComponent(next) as any);
+        router.replace(next as any);
       } else {
         router.replace('/dashboard');
       }
