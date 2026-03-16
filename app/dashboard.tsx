@@ -27,7 +27,7 @@ function EventSummaryBadge({ event }: { event: EventData }) {
         {summary.totalPolls} poll{summary.totalPolls !== 1 ? 's' : ''} · {summary.totalVotes} vote{summary.totalVotes !== 1 ? 's' : ''}
       </Text>
       {top && (
-        <Text className="text-zinc-400 text-xs" numberOfLines={1}>
+        <Text className="text-zinc-400 text-xs" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
           "{top.question}" → {top.topChoice} ({pct}%)
         </Text>
       )}
@@ -174,7 +174,7 @@ export default function DashboardScreen() {
                       
                       <HStack className="justify-between items-center">
                         <Text className="text-zinc-400 text-sm font-medium">Location</Text>
-                        <Text className="text-zinc-50 font-semibold text-sm text-right max-w-[180px]" numberOfLines={1}>
+                        <Text className="text-zinc-50 font-semibold text-sm text-right max-w-[180px]" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
                           {event.location || 'TBD'}
                         </Text>
                       </HStack>

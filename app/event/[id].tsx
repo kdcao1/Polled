@@ -56,7 +56,6 @@ function PollModal({
   const [allowMultiple, setAllowMultiple] = useState(false);
 
   useEffect(() => {
-    // Only overwrite the form if a pre-filled question was passed in
     if (initialQuestion) {
       setQuestion(initialQuestion);
       setChoices(initialChoices && initialChoices.length > 0 ? initialChoices : ['', '']);
@@ -90,7 +89,7 @@ function PollModal({
         status: 'active',
       });
       
-      handleClearForm(); // <-- Add this here so it's fresh for the next poll
+      handleClearForm(); 
       onClose();
     } catch (error) {
       console.error('Error creating poll:', error);
@@ -215,7 +214,6 @@ export default function EventScreen() {
 
   const handleCopyLink = async () => {
     await Clipboard.setStringAsync(joinLink);
-    // Optional: Add a toast notification here if you have one configured
     alert('Join link copied to clipboard!'); 
   };
 
@@ -484,7 +482,7 @@ export default function EventScreen() {
                   <ButtonText className="text-zinc-300 text-xs">Poll Location</ButtonText>
                 </Button>
               ) : (
-                <Text className="text-zinc-50 font-semibold text-right max-w-[140px]" numberOfLines={1}>
+                <Text className="text-zinc-50 font-semibold text-right max-w-[140px]" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
                   {eventData?.location || 'TBD'}
                 </Text>
               )}
@@ -634,7 +632,7 @@ export default function EventScreen() {
           />
           <View className="bg-zinc-900 rounded-3xl p-8 border border-zinc-800 items-center shadow-2xl z-10 w-full max-w-[320px]">
             <Heading size="xl" className="text-zinc-50 mb-1 text-center">Scan to Join</Heading>
-            <Text className="text-zinc-400 mb-8 text-center" numberOfLines={2}>
+            <Text className="text-zinc-400 mb-8 text-center" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
               {eventData?.title}
             </Text>
             
