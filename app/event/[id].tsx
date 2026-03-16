@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   ScrollView,
@@ -30,143 +30,35 @@ import {
 import { db, auth } from '../../config/firebaseConfig';
 
 // ---------------------------------------------------------------------------
-// Quick-poll templates (organizer one-tap creation)
-// ---------------------------------------------------------------------------
-const QUICK_TEMPLATES = [
-  { label: 'Yes / No', question: 'Yes or No?', choices: ['Yes', 'No'] },
-  {
-    label: 'Agree / Disagree',
-    question: 'Agree or disagree?',
-    choices: ['Agree', 'Disagree', 'Neutral'],
-  },
-  {
-    label: 'Rate 1–5',
-    question: 'Rate from 1 to 5',
-    choices: ['1', '2', '3', '4', '5'],
-  },
-  {
-    label: 'For / Against',
-    question: 'For or against?',
-    choices: ['For', 'Against', 'Abstain'],
-  },
-];
-
-// ---------------------------------------------------------------------------
-// Summary computation helper
-// ---------------------------------------------------------------------------
-function computeSummary(pollList: any[]) {
-  const totalVotes = pollList.reduce(
-    (sum, poll) =>
-      sum +
-      poll.options.reduce((s: number, opt: any) => s + opt.voterIds.length, 0),
-    0
-  );
-  const topPolls = pollList.map((poll) => {
-    const totalForPoll = poll.options.reduce(
-      (s: number, o: any) => s + o.voterIds.length,
-      0
-    );
-    const topOption = poll.options.reduce(
-      (a: any, b: any) => (a.voterIds.length >= b.voterIds.length ? a : b),
-      poll.options[0] ?? { text: '', voterIds: [] }
-    );
-    return {
-      question: poll.question,
-      topChoice: topOption?.text ?? '',
-      topVotes: topOption?.voterIds.length ?? 0,
-      totalVotes: totalForPoll,
-    };
-  });
-  return { totalPolls: pollList.length, totalVotes, topPolls };
-}
-
-// ---------------------------------------------------------------------------
-// Poll results view (used in Summary tab + organizer sidebar on desktop)
-// ---------------------------------------------------------------------------
-function SummaryView({ polls }: { polls: any[] }) {
-  if (polls.length === 0) {
-    return (
-      <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed">
-        <Text className="text-zinc-500">No polls yet.</Text>
-      </Box>
-    );
-  }
-
-  return (
-    <VStack className="gap-4">
-      {polls.map((poll) => {
-        const totalVotes = poll.options.reduce(
-          (s: number, o: any) => s + o.voterIds.length,
-          0
-        );
-        return (
-          <VStack
-            key={poll.id}
-            className="bg-zinc-800 rounded-xl p-4 border border-zinc-700 gap-3"
-          >
-            <Text className="text-zinc-50 font-bold text-base">
-              {poll.question}
-            </Text>
-            <VStack className="gap-2">
-              {poll.options.map((option: any, i: number) => {
-                const pct =
-                  totalVotes > 0
-                    ? Math.round((option.voterIds.length / totalVotes) * 100)
-                    : 0;
-                return (
-                  <VStack key={i} className="gap-1">
-                    <HStack className="justify-between">
-                      <Text className="text-zinc-300 text-sm flex-1 mr-2">
-                        {option.text}
-                      </Text>
-                      <Text className="text-zinc-400 text-sm font-bold">
-                        {pct}% ({option.voterIds.length})
-                      </Text>
-                    </HStack>
-                    <View className="bg-zinc-700 rounded-full overflow-hidden" style={{ height: 6 }}>
-                      <View
-                        className="bg-blue-500 rounded-full"
-                        style={{ width: `${pct}%`, height: 6 }}
-                      />
-                    </View>
-                  </VStack>
-                );
-              })}
-            </VStack>
-            <Text className="text-zinc-500 text-xs">
-              {totalVotes} total vote{totalVotes !== 1 ? 's' : ''}
-            </Text>
-          </VStack>
-        );
-      })}
-    </VStack>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// PollModal — owns all form state so typing never re-renders EventScreen
+// PollModal — Cleaned up to no longer require initial templates
 // ---------------------------------------------------------------------------
 interface PollModalProps {
   visible: boolean;
-  initialQuestion: string;
-  initialChoices: string[];
   eventId: string;
   onClose: () => void;
+  initialQuestion?: string;
+  initialChoices?: string[];
 }
 
-function PollModal({ visible, initialQuestion, initialChoices, eventId, onClose }: PollModalProps) {
+function PollModal({ 
+  visible, 
+  eventId, 
+  onClose, 
+  initialQuestion = '', 
+  initialChoices = ['', ''] 
+}: PollModalProps) {
   const [question, setQuestion] = useState(initialQuestion);
   const [choices, setChoices] = useState<string[]>(initialChoices);
   const [allowMultiple, setAllowMultiple] = useState(false);
 
-  // Sync initial values each time the modal opens
+  // Reset form each time the modal opens using the passed-in props
   useEffect(() => {
     if (visible) {
       setQuestion(initialQuestion);
       setChoices(initialChoices);
       setAllowMultiple(false);
     }
-  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visible, initialQuestion, initialChoices]);
 
   const handleClearForm = () => {
     setQuestion('');
@@ -293,22 +185,20 @@ export default function EventScreen() {
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
 
-  // Event state
   const [eventData, setEventData] = useState<any>(null);
   const [polls, setPolls] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOrganizer, setIsOrganizer] = useState(false);
 
-  // Mobile tab: 'active' | 'answered' | 'results'
-  const [activeTab, setActiveTab] = useState<'active' | 'answered' | 'results'>('active');
-
-  // Modal open state + initial values for pre-filling from quick templates
+  // Mobile tab: 'active' | 'answered'
+  const [activeTab, setActiveTab] = useState<'active' | 'answered'>('active');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalInitialQuestion, setModalInitialQuestion] = useState('');
-  const [modalInitialChoices, setModalInitialChoices] = useState(['', '']);
+  const [modalConfig, setModalConfig] = useState<{question?: string, choices?: string[]}>({});
 
-  // Track last-written summary to avoid redundant Firestore writes
-  const lastSummaryKeyRef = useRef('');
+  const openModal = (question = '', choices = ['', '']) => {
+    setModalConfig({ question, choices });
+    setIsModalOpen(true);
+  };
 
   // Real-time listener — event doc
   useEffect(() => {
@@ -337,23 +227,8 @@ export default function EventScreen() {
     return () => unsubscribe();
   }, [id]);
 
-  // Sync summary to the event doc whenever polls change (organizer only)
-  useEffect(() => {
-    if (!isOrganizer || !id || polls.length === 0) return;
-    const summary = computeSummary(polls);
-    const key = JSON.stringify(summary);
-    if (key === lastSummaryKeyRef.current) return;
-    lastSummaryKeyRef.current = key;
-    updateDoc(doc(db, 'events', id as string), { summary }).catch(console.error);
-  }, [polls, isOrganizer, id]);
-
   // Vote handler
-  const handleVote = async (
-    pollId: string,
-    optionIndex: number,
-    currentOptions: any[],
-    allowMultipleVotes: boolean
-  ) => {
+  const handleVote = async (pollId: string, optionIndex: number, currentOptions: any[], allowMultipleVotes: boolean) => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
 
@@ -366,17 +241,13 @@ export default function EventScreen() {
 
     if (allowMultipleVotes) {
       if (hasVotedForThis) {
-        newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter(
-          (v: string) => v !== uid
-        );
+        newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter((v: string) => v !== uid);
       } else {
         newOptions[optionIndex].voterIds.push(uid);
       }
     } else {
       if (hasVotedForThis) {
-        newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter(
-          (v: string) => v !== uid
-        );
+        newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter((v: string) => v !== uid);
       } else {
         newOptions.forEach((opt) => {
           opt.voterIds = opt.voterIds.filter((v: string) => v !== uid);
@@ -391,19 +262,6 @@ export default function EventScreen() {
     } catch (error) {
       console.error('Error updating vote:', error);
     }
-  };
-
-  // Quick poll — pre-fill modal with template so organizer can edit the title
-  const handleQuickPoll = (template: (typeof QUICK_TEMPLATES)[0]) => {
-    setModalInitialQuestion(template.question);
-    setModalInitialChoices(template.choices);
-    setIsModalOpen(true);
-  };
-
-  const openCustomModal = () => {
-    setModalInitialQuestion('');
-    setModalInitialChoices(['', '']);
-    setIsModalOpen(true);
   };
 
   // Delete a poll (organizer only)
@@ -433,135 +291,96 @@ export default function EventScreen() {
   }
 
   // -------------------------------------------------------------------------
-  // Shared sub-components
+  // Unified Poll Card (Displays Results visually if showResults=true)
   // -------------------------------------------------------------------------
+  const PollCard = ({ poll, compact = false, deletable = false, showResults = false }: { poll: any; compact?: boolean; deletable?: boolean; showResults?: boolean; }) => {
+    // Calculate total votes for percentage logic
+    const totalVotes = poll.options.reduce((s: number, o: any) => s + o.voterIds.length, 0);
 
-  const PollCard = ({
-    poll,
-    compact = false,
-    deletable = false,
-  }: {
-    poll: any;
-    compact?: boolean;
-    deletable?: boolean;
-  }) => (
-    <VStack
-      className={`bg-zinc-800 rounded-xl border border-zinc-700 gap-2 ${
-        compact ? 'p-4 opacity-75' : 'p-5 gap-4'
-      }`}
-    >
-      <HStack className="justify-between items-start">
-        <VStack className={`flex-1 ${compact ? 'gap-0.5' : 'gap-1'}`}>
-          <Text
-            className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}
-          >
-            {poll.question}
-          </Text>
-          {poll.allowMultiple && (
-            <Text
-              className={`text-blue-400 font-semibold uppercase tracking-wider ${
-                compact ? 'text-[10px]' : 'text-xs'
-              }`}
-            >
-              Select Multiple
+    return (
+      <VStack className={`bg-zinc-800 rounded-xl border border-zinc-700 gap-2 ${compact ? 'p-4 opacity-80' : 'p-5 gap-4'}`}>
+        <HStack className="justify-between items-start">
+          <VStack className={`flex-1 ${compact ? 'gap-0.5' : 'gap-1'}`}>
+            <Text className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}>
+              {poll.question}
             </Text>
+            {poll.allowMultiple && (
+              <Text className={`text-blue-400 font-semibold uppercase tracking-wider ${compact ? 'text-[10px]' : 'text-xs'}`}>
+                Select Multiple
+              </Text>
+            )}
+          </VStack>
+          {deletable && (
+            <TouchableOpacity
+              onPress={() => handleDeletePoll(poll.id)}
+              className="ml-3 mt-0.5 bg-zinc-700 rounded-lg px-2 py-1 active:bg-red-900/50"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text className="text-zinc-400 text-xs font-semibold">Delete</Text>
+            </TouchableOpacity>
           )}
-        </VStack>
-        {deletable && (
-          <TouchableOpacity
-            onPress={() => handleDeletePoll(poll.id)}
-            className="ml-3 mt-0.5 bg-zinc-700 rounded-lg px-2 py-1 active:bg-red-900/50"
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Text className="text-zinc-400 text-xs font-semibold">Delete</Text>
-          </TouchableOpacity>
-        )}
-      </HStack>
-
-      <VStack className={compact ? 'gap-1.5 mt-1' : 'gap-2 mt-2'}>
-        {poll.options.map((option: any, index: number) => {
-          const hasVoted = option.voterIds.includes(currentUid);
-          const voteCount = option.voterIds.length;
-          return (
-            <TouchableOpacity
-              key={index}
-              activeOpacity={0.7}
-              onPress={() =>
-                handleVote(poll.id, index, poll.options, poll.allowMultiple)
-              }
-              className={`rounded-lg border ${
-                compact ? 'p-3' : 'p-4'
-              } ${
-                hasVoted
-                  ? 'bg-blue-900/40 border-blue-500'
-                  : 'bg-zinc-900/50 border-zinc-700'
-              }`}
-            >
-              <HStack className="justify-between items-center">
-                <Text
-                  className={`font-medium ${compact ? 'text-sm' : ''} ${
-                    hasVoted ? 'text-blue-100' : 'text-zinc-300'
-                  }`}
-                >
-                  {option.text}
-                </Text>
-                <Text
-                  className={`font-bold ${compact ? 'text-xs' : 'text-sm'} ${
-                    hasVoted ? 'text-blue-400' : 'text-zinc-500'
-                  }`}
-                >
-                  {voteCount} {voteCount === 1 ? 'vote' : 'votes'}
-                </Text>
-              </HStack>
-            </TouchableOpacity>
-          );
-        })}
-      </VStack>
-    </VStack>
-  );
-
-  const QuickTemplates = () => (
-    <VStack className="gap-2 mb-4">
-      <Text className="text-zinc-400 text-xs font-semibold uppercase tracking-wider ml-1">
-        Quick Polls
-      </Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <HStack className="gap-2">
-          {QUICK_TEMPLATES.map((t) => (
-            <TouchableOpacity
-              key={t.label}
-              onPress={() => handleQuickPoll(t)}
-              className="bg-zinc-800 border border-zinc-600 rounded-full px-4 py-2 active:bg-zinc-700"
-            >
-              <Text className="text-zinc-300 text-sm font-medium">{t.label}</Text>
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity
-            onPress={openCustomModal}
-            className="bg-blue-900/50 border border-blue-600 rounded-full px-4 py-2 active:bg-blue-900"
-          >
-            <Text className="text-blue-400 text-sm font-bold">+ Custom</Text>
-          </TouchableOpacity>
         </HStack>
-      </ScrollView>
-    </VStack>
-  );
 
+        <VStack className={compact ? 'gap-1.5 mt-1' : 'gap-2 mt-2'}>
+          {poll.options.map((option: any, index: number) => {
+            const hasVoted = option.voterIds.includes(currentUid);
+            const voteCount = option.voterIds.length;
+            const pct = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
+
+            return (
+              <TouchableOpacity
+                key={index}
+                activeOpacity={0.7}
+                onPress={() => handleVote(poll.id, index, poll.options, poll.allowMultiple)}
+                className={`rounded-lg border overflow-hidden relative ${compact ? 'p-3' : 'p-4'} ${hasVoted ? 'bg-blue-900/40 border-blue-500' : 'bg-zinc-900/50 border-zinc-700'}`}
+              >
+                {/* Embedded Progress Bar for Results */}
+                {showResults && (
+                  <View 
+                    className={`absolute top-0 bottom-0 left-0 ${hasVoted ? 'bg-blue-600/30' : 'bg-zinc-700/50'}`} 
+                    style={{ width: `${pct}%` }} 
+                  />
+                )}
+                
+                <HStack className="justify-between items-center z-10">
+                  <Text className={`font-medium ${compact ? 'text-sm' : ''} ${hasVoted ? 'text-blue-100' : 'text-zinc-300'}`}>
+                    {option.text}
+                  </Text>
+                  <Text className={`font-bold ${compact ? 'text-xs' : 'text-sm'} ${hasVoted ? 'text-blue-400' : 'text-zinc-500'}`}>
+                    {showResults ? `${pct}% (${voteCount})` : `${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}`}
+                  </Text>
+                </HStack>
+              </TouchableOpacity>
+            );
+          })}
+        </VStack>
+      </VStack>
+    );
+  };
+
+// -------------------------------------------------------------------------
+  // Header & Event Details
   // -------------------------------------------------------------------------
-  // Header (shared between mobile and desktop)
-  // -------------------------------------------------------------------------
+  
+  // Calculate unique headcount by scanning all voters across all active and answered polls
+  const uniqueVoters = new Set();
+  polls.forEach((poll) => {
+    poll.options.forEach((opt: any) => {
+      opt.voterIds.forEach((uid: string) => uniqueVoters.add(uid));
+    });
+  });
+  const headcount = uniqueVoters.size;
+
   const Header = () => (
-    <VStack className="gap-2 mb-4">
-      <Button
-        variant="link"
-        onPress={() => router.replace('/dashboard')}
-        className="self-start p-0 mb-1"
-      >
+    <VStack className="gap-2 mb-6">
+      <Button variant="link" onPress={() => router.replace('/dashboard')} className="self-start p-0 mb-1">
         <ButtonText className="text-blue-500">← Back</ButtonText>
       </Button>
 
       <HStack className="justify-between items-start w-full flex-wrap gap-4">
-        <VStack className="flex-1">
+        
+        {/* Title & Join Code */}
+        <VStack className={isMobile ? "w-full" : "flex-1"}>
           <Heading size={isMobile ? '2xl' : '3xl'} className="text-zinc-50">
             {eventData?.title}
           </Heading>
@@ -575,46 +394,69 @@ export default function EventScreen() {
           </HStack>
         </VStack>
 
-        {/* Event details card — hidden on mobile (visible in Results tab) */}
-        {!isMobile && (
-          <VStack className="bg-zinc-800 rounded-2xl p-5 border border-zinc-700 min-w-[200px]">
-            <Heading size="sm" className="text-zinc-400 uppercase tracking-wider mb-2">
-              Event Details
-            </Heading>
-            <VStack className="gap-2">
-              <HStack className="justify-between gap-6">
-                <Text className="text-zinc-400">Status</Text>
-                <Text className="text-green-400 font-bold">
-                  {eventData?.status === 'voting' ? 'Active' : 'Closed'}
+        {/* Vital Signs Box (Now visible on both Mobile and Desktop) */}
+        <VStack className={`bg-zinc-800 rounded-2xl p-5 border border-zinc-700 ${isMobile ? 'w-full mt-2' : 'min-w-[240px]'}`}>
+          <Heading size="sm" className="text-zinc-400 uppercase tracking-wider mb-3">Event Details</Heading>
+          
+          <VStack className="gap-3">
+            <HStack className="justify-between gap-6 items-center">
+              <Text className="text-zinc-400 font-medium">Status</Text>
+              <Text className="text-green-400 font-bold">
+                {eventData?.status === 'voting' ? 'Active' : 'Closed'}
+              </Text>
+            </HStack>
+
+            {/* Time Row */}
+            <HStack className="justify-between gap-6 items-center">
+              <Text className="text-zinc-400 font-medium">Time</Text>
+              {!eventData?.time && isOrganizer ? (
+                <Button 
+                  size="xs" 
+                  variant="outline" 
+                  className="border-zinc-600 bg-zinc-800 h-7 px-2" 
+                  onPress={() => openModal('What time?')}
+                >
+                  <ButtonText className="text-zinc-300 text-xs">Poll Time</ButtonText>
+                </Button>
+              ) : (
+                <Text className="text-zinc-50 font-semibold">{eventData?.time || 'TBD'}</Text>
+              )}
+            </HStack>
+            
+            {/* Location Row */}
+            <HStack className="justify-between gap-6 items-center">
+              <Text className="text-zinc-400 font-medium">Location</Text>
+              {!eventData?.location && isOrganizer ? (
+                <Button 
+                  size="xs" 
+                  variant="outline" 
+                  className="border-zinc-600 bg-zinc-800 h-7 px-2" 
+                  onPress={() => openModal('Where we going?')}
+                >
+                  <ButtonText className="text-zinc-300 text-xs">Poll Location</ButtonText>
+                </Button>
+              ) : (
+                <Text className="text-zinc-50 font-semibold text-right max-w-[140px]" numberOfLines={1}>
+                  {eventData?.location || 'TBD'}
                 </Text>
-              </HStack>
-              <HStack className="justify-between gap-6">
-                <Text className="text-zinc-400">Polls</Text>
-                <Text className="text-zinc-50 font-semibold">{polls.length}</Text>
-              </HStack>
-              <HStack className="justify-between gap-6">
-                <Text className="text-zinc-400">Votes</Text>
-                <Text className="text-zinc-50 font-semibold">
-                  {polls.reduce(
-                    (s, p) =>
-                      s +
-                      p.options.reduce(
-                        (ss: number, o: any) => ss + o.voterIds.length,
-                        0
-                      ),
-                    0
-                  )}
-                </Text>
-              </HStack>
-            </VStack>
+              )}
+            </HStack>
+
+            <HStack className="justify-between gap-6 items-center">
+              <Text className="text-zinc-400 font-medium">Going</Text>
+              <Text className="text-zinc-50 font-semibold">
+                {headcount} {headcount === 1 ? 'person' : 'people'}
+              </Text>
+            </HStack>
           </VStack>
-        )}
+        </VStack>
+
       </HStack>
     </VStack>
   );
 
   // -------------------------------------------------------------------------
-  // Mobile layout
+  // Mobile Layout
   // -------------------------------------------------------------------------
   if (isMobile) {
     return (
@@ -622,31 +464,17 @@ export default function EventScreen() {
         <View className="flex-1 px-4 pt-8">
           <Header />
 
-          {/* Quick templates for organizer */}
-          {isOrganizer && <QuickTemplates />}
-
-          {/* Tab bar */}
+          {/* Tab bar (Reduced to 2 tabs) */}
           <HStack className="bg-zinc-800 rounded-xl p-1 mb-4 border border-zinc-700">
-            {(['active', 'answered', 'results'] as const).map((tab) => {
-              const label =
-                tab === 'active'
-                  ? `Active (${activePolls.length})`
-                  : tab === 'answered'
-                  ? `Answered (${answeredPolls.length})`
-                  : 'Results';
+            {(['active', 'answered'] as const).map((tab) => {
+              const label = tab === 'active' ? 'Active' : `Answered / Results`;
               return (
                 <TouchableOpacity
                   key={tab}
                   onPress={() => setActiveTab(tab)}
-                  className={`flex-1 py-2 rounded-lg items-center ${
-                    activeTab === tab ? 'bg-zinc-600' : ''
-                  }`}
+                  className={`flex-1 py-2 rounded-lg items-center ${activeTab === tab ? 'bg-zinc-600' : ''}`}
                 >
-                  <Text
-                    className={`text-sm font-semibold ${
-                      activeTab === tab ? 'text-zinc-50' : 'text-zinc-400'
-                    }`}
-                  >
+                  <Text className={`text-sm font-semibold ${activeTab === tab ? 'text-zinc-50' : 'text-zinc-400'}`}>
                     {label}
                   </Text>
                 </TouchableOpacity>
@@ -654,7 +482,13 @@ export default function EventScreen() {
             })}
           </HStack>
 
-          {/* Tab content */}
+          {/* Add Poll Button (Moved below tabs for Organizer) */}
+          {isOrganizer && activeTab === 'active' && (
+            <Button size="md" action="primary" className="bg-blue-600 border-0 mb-4" onPress={() => setIsModalOpen(true)}>
+              <ButtonText className="font-bold text-white">+ Create Poll</ButtonText>
+            </Button>
+          )}
+
           <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
             <VStack className="gap-4 pb-12">
               {activeTab === 'active' && (
@@ -663,9 +497,7 @@ export default function EventScreen() {
                     <Text className="text-zinc-500">You're all caught up!</Text>
                   </Box>
                 ) : (
-                  activePolls.map((poll) => (
-                    <PollCard key={poll.id} poll={poll} deletable={isOrganizer} />
-                  ))
+                  activePolls.map((poll) => <PollCard key={poll.id} poll={poll} deletable={isOrganizer} />)
                 )
               )}
 
@@ -675,90 +507,42 @@ export default function EventScreen() {
                     <Text className="text-zinc-500">No answered polls yet.</Text>
                   </Box>
                 ) : (
-                  answeredPolls.map((poll) => (
-                    <PollCard key={poll.id} poll={poll} compact />
-                  ))
+                  // showResults=true embeds the visual progress bars inside the Answered cards
+                  answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults />)
                 )
-              )}
-
-              {activeTab === 'results' && (
-                <VStack className="gap-4">
-                  {/* Mini event details on mobile Results tab */}
-                  <VStack className="bg-zinc-800 rounded-2xl p-4 border border-zinc-700 gap-2">
-                    <HStack className="justify-between">
-                      <Text className="text-zinc-400">Status</Text>
-                      <Text className="text-green-400 font-bold">
-                        {eventData?.status === 'voting' ? 'Active' : 'Closed'}
-                      </Text>
-                    </HStack>
-                    <HStack className="justify-between">
-                      <Text className="text-zinc-400">Total Polls</Text>
-                      <Text className="text-zinc-50 font-semibold">{polls.length}</Text>
-                    </HStack>
-                    <HStack className="justify-between">
-                      <Text className="text-zinc-400">Total Votes</Text>
-                      <Text className="text-zinc-50 font-semibold">
-                        {polls.reduce(
-                          (s, p) =>
-                            s +
-                            p.options.reduce(
-                              (ss: number, o: any) => ss + o.voterIds.length,
-                              0
-                            ),
-                          0
-                        )}
-                      </Text>
-                    </HStack>
-                  </VStack>
-                  <SummaryView polls={polls} />
-                </VStack>
               )}
             </VStack>
           </ScrollView>
         </View>
 
-        <PollModal
-          visible={isModalOpen}
-          initialQuestion={modalInitialQuestion}
-          initialChoices={modalInitialChoices}
-          eventId={id as string}
-          onClose={() => setIsModalOpen(false)}
-        />
+        <PollModal visible={isModalOpen} eventId={id as string} onClose={() => setIsModalOpen(false)} />
       </Box>
     );
   }
 
   // -------------------------------------------------------------------------
-  // Desktop layout (3 columns: Active | Answered | Results)
+  // Desktop Layout (2 Columns: Active | Answered & Results)
   // -------------------------------------------------------------------------
   return (
     <Box className="flex-1 bg-zinc-900 items-center">
-      <View className="w-full max-w-6xl flex-1 px-6 pt-6">
+      {/* Reduced to max-w-5xl since we only have 2 columns now */}
+      <View className="w-full max-w-5xl flex-1 px-6 pt-6">
         <Header />
 
-        {/* Quick templates for organizer */}
-        {isOrganizer && <QuickTemplates />}
-
-        {/* 3-column grid */}
-        <View className="flex-1 flex-row gap-6 w-full pb-6">
+        {/* 2-column grid */}
+        <View className="flex-1 flex-col md:flex-row gap-8 w-full pb-6">
 
           {/* LEFT: Active Polls */}
           <View className="flex-1">
             <HStack className="justify-between items-end mb-4 mt-1">
-              <Heading size="xl" className="text-zinc-50">
-                Active ({activePolls.length})
-              </Heading>
+              <Heading size="xl" className="text-zinc-50">Active</Heading>
               {isOrganizer && (
-                <Button
-                  size="sm"
-                  action="primary"
-                  className="bg-blue-600 border-0"
-                  onPress={openCustomModal}
-                >
-                  <ButtonText className="font-bold text-white">+ Custom</ButtonText>
+                <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => setIsModalOpen(true)}>
+                  <ButtonText className="font-bold text-white">+ New Poll</ButtonText>
                 </Button>
               )}
             </HStack>
+            
             <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
               <VStack className="gap-4 pb-12">
                 {activePolls.length === 0 ? (
@@ -766,40 +550,26 @@ export default function EventScreen() {
                     <Text className="text-zinc-500">You're all caught up!</Text>
                   </Box>
                 ) : (
-                  activePolls.map((poll) => (
-                    <PollCard key={poll.id} poll={poll} deletable={isOrganizer} />
-                  ))
+                  activePolls.map((poll) => <PollCard key={poll.id} poll={poll} deletable={isOrganizer} />)
                 )}
               </VStack>
             </ScrollView>
           </View>
 
-          {/* MIDDLE: Answered */}
+          {/* RIGHT: Answered / Results */}
           <View className="flex-1">
-            <Heading size="xl" className="text-zinc-50 mb-4 mt-1">
-              Answered ({answeredPolls.length})
-            </Heading>
+            <Heading size="xl" className="text-zinc-50 mb-4 mt-1">Answered / Results</Heading>
+            
             <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-              <VStack className="gap-3 pb-12">
+              <VStack className="gap-4 pb-12">
                 {answeredPolls.length === 0 ? (
                   <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed">
                     <Text className="text-zinc-500">No answered polls yet.</Text>
                   </Box>
                 ) : (
-                  answeredPolls.map((poll) => (
-                    <PollCard key={poll.id} poll={poll} compact />
-                  ))
+                  // showResults=true embeds the visual progress bars inside the Answered cards
+                  answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults />)
                 )}
-              </VStack>
-            </ScrollView>
-          </View>
-
-          {/* RIGHT: Results / Summary */}
-          <View className="flex-1">
-            <Heading size="xl" className="text-zinc-50 mb-4 mt-1">Results</Heading>
-            <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-              <VStack className="gap-3 pb-12">
-                <SummaryView polls={polls} />
               </VStack>
             </ScrollView>
           </View>
@@ -807,12 +577,12 @@ export default function EventScreen() {
         </View>
       </View>
 
-      <PollModal
-        visible={isModalOpen}
-        initialQuestion={modalInitialQuestion}
-        initialChoices={modalInitialChoices}
-        eventId={id as string}
-        onClose={() => setIsModalOpen(false)}
+      <PollModal 
+        visible={isModalOpen} 
+        eventId={id as string} 
+        onClose={() => setIsModalOpen(false)} 
+        initialQuestion={modalConfig.question}
+        initialChoices={modalConfig.choices}
       />
     </Box>
   );
