@@ -1,6 +1,10 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
+import { initializeAuth, browserLocalPersistence } from 'firebase/auth';
+// @ts-ignore
+import { getReactNativePersistence } from 'firebase/auth';
+import { Platform } from 'react-native';
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 
 const firebaseConfig = {
   apiKey: "AIzaSyBdk_5ryzPLg5-mZ3BDP4WJHoFkXOyJoHo",
@@ -12,20 +16,12 @@ const firebaseConfig = {
   measurementId: "G-Q9K2YQQ0LM"
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Export Auth and Firestore for use in your app
-export const auth = getAuth(app);
 export const db = getFirestore(app);
 
-// Helper function to trigger the silent login
-export const loginSilently = async () => {
-  try {
-    const userCredential = await signInAnonymously(auth);
-    return userCredential.user;
-  } catch (error) {
-    console.error("Error signing in:", error);
-    return null;
-  }
-};
+const persistence = Platform.OS === 'web' 
+  ? browserLocalPersistence 
+  : getReactNativePersistence(ReactNativeAsyncStorage);
+
+export const auth = initializeAuth(app, { persistence });
