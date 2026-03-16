@@ -12,6 +12,8 @@ export interface PollSummary {
 export interface EventData {
   id: string;
   title: string;
+  time: string,
+  location: string,
   status: string;
   joinCode?: string;
   organizerId?: string;
