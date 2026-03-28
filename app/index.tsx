@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
+import { HStack } from '@/components/ui/hstack';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
@@ -14,7 +15,7 @@ export default function LandingScreen() {
       <VStack className="gap-12 items-center w-full max-w-sm">
         
         <VStack className="gap-1 items-center">
-          <Heading size="3xl" className="text-zinc-50">Polled?</Heading>
+          <Heading size="3xl" className="text-zinc-50">Polled</Heading>
           <Text size="lg" className="text-zinc-400">Stop scrolling. Start voting.</Text>
         </VStack>
 
@@ -26,6 +27,19 @@ export default function LandingScreen() {
           <Button size="xl" variant="outline" action="secondary" className="border-zinc-600" onPress={() => router.push('/onboarding?next=/join')}>
             <ButtonText className="text-zinc-50 font-bold">Join an Event</ButtonText>
           </Button>
+
+          {/* --- NEW LOGIN LINK --- */}
+          <HStack className="justify-center items-center mt-4 gap-1">
+            <Text className="text-zinc-400 text-sm">Already have an account?</Text>
+            <Button 
+              size="sm" 
+              variant="link" 
+              className="p-0" 
+              onPress={() => router.push('/login')}
+            >
+              <ButtonText className="text-blue-500 font-bold">Log in</ButtonText>
+            </Button>
+          </HStack>
         </VStack>
 
       </VStack>

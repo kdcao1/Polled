@@ -10,6 +10,7 @@ import { useRouter } from 'expo-router';
 import { doc, deleteDoc, updateDoc, arrayRemove } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 import { useDashboard, EventData } from '../hooks/useDashboard';
+import { Settings } from 'lucide-react-native';
 
 function EventSummaryBadge({ event }: { event: EventData }) {
   const { summary } = event;
@@ -84,7 +85,16 @@ export default function DashboardScreen() {
         <HStack className="justify-between items-center w-full">
           <Heading size="2xl" className="text-zinc-50">Events</Heading>
 
-          <HStack className="gap-3">
+          <HStack className="gap-3 items-center">
+            {/* --- NEW SETTINGS BUTTON --- */}
+            <TouchableOpacity 
+              activeOpacity={0.7}
+              onPress={() => router.push('/settings')}
+              className="w-10 h-10 rounded-full bg-zinc-800 border border-zinc-700 items-center justify-center"
+            >
+              <Settings size={20} color="#a1a1aa" />
+            </TouchableOpacity>
+
             <Button
               size="sm"
               variant="outline"
@@ -93,6 +103,7 @@ export default function DashboardScreen() {
             >
               <ButtonText className="text-zinc-50 font-bold">Join</ButtonText>
             </Button>
+            
             <Button
               size="sm"
               action="primary"
