@@ -1,5 +1,5 @@
-import React from 'react';
-import { ActivityIndicator, Alert, Platform, ScrollView, TouchableOpacity, useWindowDimensions } from 'react-native';
+import React, { useState } from 'react';
+import { ActivityIndicator, Platform, ScrollView, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -10,31 +10,9 @@ import { useRouter } from 'expo-router';
 import { doc, deleteDoc, updateDoc, arrayRemove } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 import { useDashboard, EventData } from '../hooks/useDashboard';
-import { Settings } from 'lucide-react-native';
-
-function EventSummaryBadge({ event }: { event: EventData }) {
-  const { summary } = event;
-  if (!summary || summary.totalPolls === 0) return null;
-
-  const top = summary.topPolls?.[0];
-  const pct =
-    top && top.totalVotes > 0
-      ? Math.round((top.topVotes / top.totalVotes) * 100)
-      : 0;
-
-  return (
-    <VStack className="mt-3 pt-3 border-t border-zinc-700 gap-1">
-      <Text className="text-zinc-500 text-xs">
-        {summary.totalPolls} poll{summary.totalPolls !== 1 ? 's' : ''} · {summary.totalVotes} vote{summary.totalVotes !== 1 ? 's' : ''}
-      </Text>
-      {top && (
-        <Text className="text-zinc-400 text-xs" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
-          "{top.question}" → {top.topChoice} ({pct}%)
-        </Text>
-      )}
-    </VStack>
-  );
-}
+import { Settings, MoreVertical } from 'lucide-react-native';
+import EventActionModal from '@/components/custom/EventActionModal';
+import EventSummaryBadge from '@/components/custom/EventSummaryBadge'; // Ensure this path matches where you saved it!
 
 export default function DashboardScreen() {
   const { events, loading, removeEvent } = useDashboard();
@@ -44,49 +22,41 @@ export default function DashboardScreen() {
 
   const currentUid = auth.currentUser?.uid;
 
-  const handleDelete = (event: EventData) => {
-    const isOrganizer = event.organizerId === currentUid;
-    const actionLabel = isOrganizer ? 'Delete' : 'Leave';
-    const message = isOrganizer
-      ? `"${event.title}" will be permanently deleted for everyone.`
-      : `You will be removed from "${event.title}".`;
+  const [actionEvent, setActionEvent] = useState<EventData | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-    const performDelete = async () => {
-      try {
-        const userRef = doc(db, 'users', currentUid!);
-        await updateDoc(userRef, { joinedEvents: arrayRemove(event.id) });
-        if (isOrganizer) {
-          await deleteDoc(doc(db, 'events', event.id));
-        }
-        removeEvent(event.id);
-      } catch (error) {
-        console.error('Error removing event:', error);
-      }
-    };
+  const handleConfirmAction = async () => {
+    if (!actionEvent) return;
+    setIsDeleting(true);
 
-    if (Platform.OS === 'web') {
-      if (window.confirm(`${actionLabel} event?\n\n${message}`)) {
-        performDelete();
+    try {
+      const userRef = doc(db, 'users', currentUid!);
+      await updateDoc(userRef, { joinedEvents: arrayRemove(actionEvent.id) });
+      
+      // If they are the organizer, delete the whole event from the database
+      if (actionEvent.organizerId === currentUid) {
+        await deleteDoc(doc(db, 'events', actionEvent.id));
       }
-    } else {
-      Alert.alert(`${actionLabel} Event`, message, [
-        { text: 'Cancel', style: 'cancel' },
-        { text: actionLabel, style: 'destructive', onPress: performDelete },
-      ]);
+      
+      removeEvent(actionEvent.id);
+      setActionEvent(null);
+    } catch (error) {
+      console.error('Error removing event:', error);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
   return (
     <Box className="flex-1 bg-zinc-900 items-center px-4">
       <VStack
-        className="w-full flex-1 pt-12 gap-6"
+        className="w-full flex-1 pt-4 gap-6"
         style={{ maxWidth: isMobile ? undefined : 640 }}
       >
         <HStack className="justify-between items-center w-full">
           <Heading size="2xl" className="text-zinc-50">Events</Heading>
 
           <HStack className="gap-3 items-center">
-            {/* --- NEW SETTINGS BUTTON --- */}
             <TouchableOpacity 
               activeOpacity={0.7}
               onPress={() => router.push('/settings')}
@@ -155,17 +125,16 @@ export default function DashboardScreen() {
                         </HStack>
                       </VStack>
 
+                      {/* --- 3. THE FIXED THREE DOT BUTTON --- */}
                       <TouchableOpacity
                         onPress={(e) => {
-                          e.stopPropagation();
-                          handleDelete(event);
+                          e.stopPropagation(); 
+                          setActionEvent(event); // This correctly triggers the modal!
                         }}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        className="bg-zinc-900/50 px-3 py-1.5 rounded-lg border border-zinc-700 shrink-0"
+                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                        className="w-8 h-8 rounded-full bg-zinc-900/50 items-center justify-center border border-zinc-700/50 shrink-0"
                       >
-                        <Text className="text-red-400 text-xs font-semibold">
-                          {event.organizerId === currentUid ? 'Delete' : 'Leave'}
-                        </Text>
+                        <MoreVertical size={18} color="#a1a1aa" />
                       </TouchableOpacity>
                     </HStack>
 
@@ -191,7 +160,9 @@ export default function DashboardScreen() {
                       </HStack>
                     </VStack>
 
+                    {/* RESTORED SUMMARY BADGE */}
                     <EventSummaryBadge event={event} />
+
                   </VStack>
                 </TouchableOpacity>
               ))}
@@ -199,6 +170,19 @@ export default function DashboardScreen() {
           </ScrollView>
         )}
       </VStack>
+
+      <EventActionModal
+        event={actionEvent}
+        currentUid={currentUid}
+        isDeleting={isDeleting}
+        onClose={() => setActionEvent(null)}
+        onEdit={(id) => {
+          setActionEvent(null);
+          router.push(`/edit/${id}`);
+        }}
+        onConfirmAction={handleConfirmAction}
+      />
+
     </Box>
   );
 }

@@ -1,41 +1,79 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
+import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { doc, onSnapshot, collection, query, orderBy, updateDoc, deleteDoc } from 'firebase/firestore';
-import { db, auth } from '../../config/firebaseConfig';
-
-import PollModal from '../../components/custom/PollModal';
-import PollCard from '../../components/custom/PollCard';
-import EventHeader from '../../components/custom/EventHeader';
-import QRModal from '../../components/custom/QRModal';
+import { db, auth } from '@/config/firebaseConfig';
+import PollModal from '@/components/custom/PollModal';
+import PollCard from '@/components/custom/PollCard';
+import EventHeader from '@/components/custom/EventHeader';
+import QRModal from '@/components/custom/QRModal';
+import EmptyState from '@/components/custom/EmptyState';
+import PollActionModal from '@/components/custom/PollActionModal';
+import ParticipantsModal from '@/components/custom/ParticipantsModal';
+import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc } from 'firebase/firestore';
+import { Alert, View, ScrollView, TouchableOpacity, useWindowDimensions, Share } from 'react-native';
+import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
 
 export default function EventScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
+  const toast = useToast();
 
   const [eventData, setEventData] = useState<any>(null);
   const [polls, setPolls] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOrganizer, setIsOrganizer] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'active' | 'answered'>('active');
+  // --- NEW: Added 'details' to the tab state ---
+  const [activeTab, setActiveTab] = useState<'details' | 'active' | 'answered'>('details');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalConfig, setModalConfig] = useState<{question?: string, choices?: string[]}>({});
+  const [modalConfig, setModalConfig] = useState<{question?: string, choices?: string[], pollIdToEdit?: string}>({});
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
+  const [actionPoll, setActionPoll] = useState<any>(null);
+  const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
 
   const joinLink = eventData?.joinCode ? `https://polled.app/join/${eventData.joinCode}` : `https://polled.app/join/${id}`;
 
   const openModal = (question = '', choices = ['', '']) => {
-    setModalConfig({ question, choices });
+    setModalConfig({ question, choices, pollIdToEdit: undefined });
     setIsModalOpen(true);
+  };
+
+  const handleNativeShare = async () => {
+    try {
+      await Share.share({
+        message: `Join my event "${eventData?.title}" on Polled! Code: ${eventData?.joinCode}\n${joinLink}`,
+      });
+    } catch (error) {
+      console.error('Error sharing:', error);
+    }
+  };
+
+  const handleCopyCode = async () => {
+    const codeToCopy = eventData?.joinCode || id;
+    if (!codeToCopy) return;
+
+    await Clipboard.setStringAsync(codeToCopy as string);
+    
+    toast.show({
+      placement: "top",
+      render: ({ id: toastId }) => (
+        <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+          <VStack>
+            <ToastTitle className="text-green-400 font-bold text-sm">Copied!</ToastTitle>
+            <ToastDescription className="text-zinc-300 text-xs mt-0.5">Join code copied to clipboard.</ToastDescription>
+          </VStack>
+        </Toast>
+      ),
+    });
   };
 
   useEffect(() => {
@@ -62,38 +100,55 @@ export default function EventScreen() {
     return () => unsubscribe();
   }, [id]);
 
-  const handleVote = async (pollId: string, optionIndex: number, currentOptions: any[], allowMultipleVotes: boolean) => {
+  const handleVote = async (pollId: string, selectedIndices: number | number[], currentOptions: any[], allowMultipleVotes: boolean) => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
 
-    const poll = polls.find(p => p.id === pollId);
-    if (poll?.expiresAt && new Date() > (poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt))) {
-      alert('This poll has ended.');
-      return;
-    }
-
-    const newOptions = currentOptions.map((opt) => ({ ...opt, voterIds: [...opt.voterIds] }));
-    const hasVotedForThis = newOptions[optionIndex].voterIds.includes(uid);
-
-    if (allowMultipleVotes) {
-      if (hasVotedForThis) {
-        newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter((v: string) => v !== uid);
-      } else {
-        newOptions[optionIndex].voterIds.push(uid);
-      }
-    } else {
-      if (hasVotedForThis) {
-        newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter((v: string) => v !== uid);
-      } else {
-        newOptions.forEach((opt) => opt.voterIds = opt.voterIds.filter((v: string) => v !== uid));
-        newOptions[optionIndex].voterIds.push(uid);
-      }
-    }
+    const pollRef = doc(db, 'events', id as string, 'polls', pollId);
 
     try {
-      await updateDoc(doc(db, 'events', id as string, 'polls', pollId), { options: newOptions });
-    } catch (error) {
-      console.error('Error updating vote:', error);
+      await runTransaction(db, async (transaction) => {
+        const pollDoc = await transaction.get(pollRef);
+        if (!pollDoc.exists()) throw new Error("Poll not found");
+
+        const pollData = pollDoc.data();
+
+        if (pollData.expiresAt && new Date() > (pollData.expiresAt?.toDate ? pollData.expiresAt.toDate() : new Date(pollData.expiresAt))) {
+          throw new Error("EXPIRED");
+        }
+
+        let newOptions = pollData.options.map((opt: any) => ({ 
+          ...opt, 
+          voterIds: [...opt.voterIds] 
+        }));
+        
+        if (allowMultipleVotes && Array.isArray(selectedIndices)) {
+          newOptions.forEach((opt: any) => opt.voterIds = opt.voterIds.filter((v: string) => v !== uid));
+          selectedIndices.forEach((idx) => {
+            if (newOptions[idx]) {
+              newOptions[idx].voterIds.push(uid);
+            }
+          });
+        } else {
+          const optionIndex = selectedIndices as number;
+          const hasVotedForThis = newOptions[optionIndex].voterIds.includes(uid);
+          if (hasVotedForThis) {
+            newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter((v: string) => v !== uid);
+          } else {
+            newOptions.forEach((opt: any) => opt.voterIds = opt.voterIds.filter((v: string) => v !== uid));
+            newOptions[optionIndex].voterIds.push(uid);
+          }
+        }
+
+        transaction.update(pollRef, { options: newOptions });
+      });
+      
+    } catch (error: any) {
+      if (error.message === "EXPIRED") {
+        Alert.alert('Poll Ended', 'This poll is no longer accepting votes.');
+      } else {
+        console.error('Error updating vote:', error);
+      }
     }
   };
 
@@ -106,9 +161,51 @@ export default function EventScreen() {
     }
   };
 
+  const handleEndPollEarly = async (poll: any) => {
+    if (!id) return;
+    try {
+      await updateDoc(doc(db, 'events', id as string, 'polls', poll.id), {
+        expiresAt: new Date()
+      });
+    } catch (error) {
+      console.error('Error ending poll early:', error);
+    }
+  };
+
+  const handleEditPoll = (poll: any) => {
+    setModalConfig({ 
+      question: poll.question, 
+      choices: poll.options.map((o: any) => o.text),
+      pollIdToEdit: poll.id
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleRerunPoll = (poll: any) => {
+    setModalConfig({ 
+      question: poll.question, 
+      choices: poll.options.map((o: any) => o.text),
+      pollIdToEdit: undefined
+    });
+    setIsModalOpen(true);
+  };
+
   const currentUid = auth.currentUser?.uid;
-  const activePolls = polls.filter((poll) => !poll.options.some((opt: any) => opt.voterIds.includes(currentUid)));
-  const answeredPolls = polls.filter((poll) => poll.options.some((opt: any) => opt.voterIds.includes(currentUid)));
+  
+  const isPollExpired = (poll: any) => {
+    if (!poll.expiresAt) return false;
+    const expiresAtDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt);
+    return new Date() > expiresAtDate;
+  };
+
+  const activePolls = polls.filter((poll) => {
+    const hasVoted = poll.options.some((opt: any) => opt.voterIds.includes(currentUid));
+    return !hasVoted && !isPollExpired(poll);
+  });
+  const answeredPolls = polls.filter((poll) => {
+    const hasVoted = poll.options.some((opt: any) => opt.voterIds.includes(currentUid));
+    return hasVoted || isPollExpired(poll);
+  });
 
   const uniqueVoters = new Set();
   polls.forEach((poll) => poll.options.forEach((opt: any) => opt.voterIds.forEach((uid: string) => uniqueVoters.add(uid))));
@@ -124,56 +221,143 @@ export default function EventScreen() {
 
   return (
     <Box className="flex-1 bg-zinc-900 items-center">
-      <View className={`flex-1 w-full ${isMobile ? 'px-4 pt-8' : 'max-w-5xl px-6 pt-6'}`}>
+      <View className={`flex-1 w-full ${isMobile ? 'px-4' : 'max-w-5xl px-6 pt-6'}`}>
         
-        <EventHeader 
-          eventData={eventData} 
-          headcount={headcount} 
-          isMobile={isMobile} 
-          isOrganizer={isOrganizer} 
-          joinLink={joinLink}
-          onBack={() => router.canGoBack() ? router.back() : router.replace('/dashboard')}
-          onShowQR={() => setIsQRModalOpen(true)}
-          onOpenModal={openModal}
-        />
+        {/* --- DESKTOP HEADER --- */}
+        {!isMobile && (
+          <EventHeader 
+            eventData={eventData} 
+            headcount={headcount} 
+            isMobile={isMobile} 
+            isOrganizer={isOrganizer} 
+            joinLink={joinLink}
+            onBack={() => router.canGoBack() ? router.back() : router.replace('/dashboard')}
+            onShowQR={() => setIsQRModalOpen(true)}
+            onOpenModal={openModal}
+            onShowParticipants={() => setIsParticipantsModalOpen(true)}
+          />
+        )}
 
         {isMobile ? (
           <>
+            {/* --- NEW COMPACT MOBILE HEADER --- */}
+            <VStack className="gap-4 mb-4">
+              
+              {/* Back Button */}
+              <Button variant="link" className="self-start p-0 -ml-2" onPress={() => router.canGoBack() ? router.back() : router.replace('/dashboard')}>
+                <ButtonText className="text-blue-500">← Dashboard</ButtonText>
+              </Button>
+
+              {/* Title & Code on One Line */}
+              <HStack className="justify-between items-center gap-4">
+                <Heading size="2xl" className="text-zinc-50 flex-1" numberOfLines={1}>{eventData?.title}</Heading>
+                <TouchableOpacity activeOpacity={0.7} onPress={handleCopyCode}>
+                  <Box className="bg-zinc-800 px-3 py-1.5 rounded-lg border border-zinc-700">
+                    <Text className="text-zinc-300 font-mono text-sm font-bold tracking-widest">Join Code: {eventData?.joinCode || id}</Text>
+                  </Box>
+                </TouchableOpacity>
+              </HStack>
+
+              {/* Share Options */}
+              <HStack className="gap-3">
+                <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={() => setIsQRModalOpen(true)}>
+                  <QrCode size={16} color="#f4f4f5" />
+                  <ButtonText className="text-zinc-50 font-bold">QR Code</ButtonText>
+                </Button>
+                <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={handleNativeShare}>
+                  <ShareIcon size={16} color="#f4f4f5" />
+                  <ButtonText className="text-zinc-50 font-bold">Share Link</ButtonText>
+                </Button>
+              </HStack>
+            </VStack>
+
+            {/* --- TABS --- */}
             <HStack className="bg-zinc-800 rounded-xl p-1 mb-4 border border-zinc-700">
-              {(['active', 'answered'] as const).map((tab) => (
+              {(['details', 'active', 'answered'] as const).map((tab) => (
                 <TouchableOpacity key={tab} onPress={() => setActiveTab(tab)} className={`flex-1 py-2 rounded-lg items-center ${activeTab === tab ? 'bg-zinc-600' : ''}`}>
-                  <Text className={`text-sm font-semibold ${activeTab === tab ? 'text-zinc-50' : 'text-zinc-400'}`}>
-                    {tab === 'active' ? 'Active' : 'Answered / Results'}
+                  <Text className={`text-xs font-semibold ${activeTab === tab ? 'text-zinc-50' : 'text-zinc-400'}`}>
+                    {tab === 'details' ? 'Details' : tab === 'active' ? 'Active' : 'Results'}
                   </Text>
                 </TouchableOpacity>
               ))}
             </HStack>
 
+            {/* --- CREATE BUTTON (Only on Active tab) --- */}
             {isOrganizer && activeTab === 'active' && (
               <Button size="md" action="primary" className="bg-blue-600 border-0 mb-4" onPress={() => setIsModalOpen(true)}>
                 <ButtonText className="font-bold text-white">+ Create Poll</ButtonText>
               </Button>
             )}
 
+            {/* --- TAB CONTENT --- */}
             <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
               <VStack className="gap-4 pb-12">
-                {activeTab === 'active' ? (
+                
+                {activeTab === 'details' && (
+                  <VStack className="gap-4 mt-1">
+                    <VStack className="bg-zinc-800/40 p-5 rounded-2xl border border-zinc-700/50 gap-4">
+                      <VStack>
+                        <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Status</Text>
+                        <Text className={`text-lg font-bold ${eventData?.status === 'voting' ? 'text-green-400' : 'text-zinc-500'}`}>
+                          {eventData?.status === 'voting' ? 'Active Voting' : 'Closed'}
+                        </Text>
+                      </VStack>
+                      <View className="h-px bg-zinc-700/50 w-full" />
+                      <VStack>
+                        <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Time</Text>
+                        <Text className="text-zinc-50 text-lg font-semibold">{eventData?.time || 'TBD'}</Text>
+                      </VStack>
+                      <View className="h-px bg-zinc-700/50 w-full" />
+                      <VStack>
+                        <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Location</Text>
+                        <Text className="text-zinc-50 text-lg font-semibold">{eventData?.location || 'TBD'}</Text>
+                      </VStack>
+                      <View className="h-px bg-zinc-700/50 w-full" />
+                      <HStack className="justify-between items-center">
+                        <VStack>
+                          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Active Voters</Text>
+                          <Text className="text-zinc-50 text-lg font-semibold mt-0.5">{headcount} {headcount === 1 ? 'person' : 'people'}</Text>
+                        </VStack>
+                        <TouchableOpacity activeOpacity={0.7} onPress={() => setIsParticipantsModalOpen(true)} className="p-2 bg-zinc-700/50 rounded-full border border-zinc-600/50">
+                          <Eye size={20} color="#a1a1aa" />
+                        </TouchableOpacity>
+                      </HStack>
+                    </VStack>
+
+                    {isOrganizer && (
+                      <Button 
+                        size="xl" 
+                        variant="outline" 
+                        className="border-zinc-600 bg-zinc-800" 
+                        onPress={() => router.push(`/edit/${id as string}`)}
+                      >
+                        <ButtonText className="font-bold text-zinc-50">Edit Event Details</ButtonText>
+                      </Button>
+                    )}
+                  </VStack>
+                )}
+
+                {activeTab === 'active' && (
                   activePolls.length === 0 ? (
-                    <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed"><Text className="text-zinc-500">You're all caught up!</Text></Box>
+                    <EmptyState message="You're all caught up!" />
                   ) : (
-                    activePolls.map((poll) => <PollCard key={poll.id} poll={poll} deletable={isOrganizer} currentUid={currentUid} onVote={handleVote} onDelete={handleDeletePoll} />)
-                  )
-                ) : (
-                  answeredPolls.length === 0 ? (
-                    <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed"><Text className="text-zinc-500">No answered polls yet.</Text></Box>
-                  ) : (
-                    answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults deletable={isOrganizer} currentUid={currentUid} onVote={handleVote} onDelete={handleDeletePoll} />)
+                    activePolls.map((poll) => <PollCard key={poll.id} poll={poll} isOrganizer={isOrganizer} currentUid={currentUid} onVote={handleVote} onActionPress={setActionPoll} />)
                   )
                 )}
+
+                {activeTab === 'answered' && (
+                  answeredPolls.length === 0 ? (
+                    <EmptyState message="No answered polls yet." />
+                  ) : (
+                    answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults isOrganizer={isOrganizer} currentUid={currentUid} onVote={handleVote} onActionPress={setActionPoll} />)
+                  )
+                )}
+
               </VStack>
             </ScrollView>
           </>
         ) : (
+          /* --- DESKTOP VIEW --- */
           <View className="flex-1 flex-col md:flex-row gap-8 w-full pb-6">
             <View className="flex-1">
               <HStack className="justify-between items-end mb-4 mt-1">
@@ -187,9 +371,9 @@ export default function EventScreen() {
               <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
                 <VStack className="gap-4 pb-12">
                   {activePolls.length === 0 ? (
-                    <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed"><Text className="text-zinc-500">You're all caught up!</Text></Box>
+                    <EmptyState message="You're all caught up!" />
                   ) : (
-                    activePolls.map((poll) => <PollCard key={poll.id} poll={poll} deletable={isOrganizer} currentUid={currentUid} onVote={handleVote} onDelete={handleDeletePoll} />)
+                    activePolls.map((poll) => <PollCard key={poll.id} poll={poll} isOrganizer={isOrganizer} currentUid={currentUid} onVote={handleVote} onActionPress={setActionPoll} />)
                   )}
                 </VStack>
               </ScrollView>
@@ -200,9 +384,9 @@ export default function EventScreen() {
               <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
                 <VStack className="gap-4 pb-12">
                   {answeredPolls.length === 0 ? (
-                    <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed"><Text className="text-zinc-500">No answered polls yet.</Text></Box>
+                    <EmptyState message="No answered polls yet." />
                   ) : (
-                    answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults deletable={isOrganizer} currentUid={currentUid} onVote={handleVote} onDelete={handleDeletePoll} />)
+                    answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults isOrganizer={isOrganizer} currentUid={currentUid} onVote={handleVote} onActionPress={setActionPoll} />)
                   )}
                 </VStack>
               </ScrollView>
@@ -212,7 +396,17 @@ export default function EventScreen() {
       </View>
 
       <QRModal visible={isQRModalOpen} onClose={() => setIsQRModalOpen(false)} eventData={eventData} joinLink={joinLink} />
-      <PollModal visible={isModalOpen} eventId={id as string} onClose={() => setIsModalOpen(false)} initialQuestion={modalConfig.question} initialChoices={modalConfig.choices} />
+      <PollModal visible={isModalOpen} eventId={id as string} onClose={() => setIsModalOpen(false)} initialQuestion={modalConfig.question} initialChoices={modalConfig.choices} pollIdToEdit={modalConfig.pollIdToEdit} />
+      <PollActionModal 
+        isOpen={!!actionPoll} 
+        poll={actionPoll} 
+        onClose={() => setActionPoll(null)} 
+        onDelete={(poll: any) => handleDeletePoll(poll.id)}
+        onEndEarly={handleEndPollEarly}
+        onEdit={handleEditPoll}
+        onRerun={handleRerunPoll}
+      />
+      <ParticipantsModal visible={isParticipantsModalOpen} onClose={() => setIsParticipantsModalOpen(false)} voterIds={Array.from(uniqueVoters) as string[]} />
     </Box>
   );
 }

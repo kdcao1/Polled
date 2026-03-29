@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, Modal, TouchableOpacity, Pressable, Platform } from 'react-native';
+import { View, ScrollView, Modal, TouchableOpacity, Pressable, Platform, ActionSheetIOS } from 'react-native';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
 import { Heading } from '@/components/ui/heading';
@@ -7,7 +7,7 @@ import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../../config/firebaseConfig'; // Adjust path if needed
 
 interface PollModalProps {
@@ -16,6 +16,7 @@ interface PollModalProps {
   onClose: () => void;
   initialQuestion?: string;
   initialChoices?: string[];
+  pollIdToEdit?: string;
 }
 
 const DURATION_OPTIONS = [
@@ -29,7 +30,7 @@ const DURATION_OPTIONS = [
   { label: '1 Week', value: 168 },
 ];
 
-export default function PollModal({ visible, eventId, onClose, initialQuestion, initialChoices }: PollModalProps) {
+export default function PollModal({ visible, eventId, onClose, initialQuestion, initialChoices, pollIdToEdit }: PollModalProps) {
   const [question, setQuestion] = useState('');
   const [choices, setChoices] = useState<string[]>(['', '']);
   const [allowMultiple, setAllowMultiple] = useState(false);
@@ -37,14 +38,14 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
   const [durationHours, setDurationHours] = useState<number>(24);
 
   useEffect(() => {
-    if (initialQuestion) {
-      setQuestion(initialQuestion);
+    if (visible) {
+      setQuestion(initialQuestion || '');
       setChoices(initialChoices && initialChoices.length > 0 ? initialChoices : ['', '']);
       setAllowMultiple(false);
       setIsDropdownOpen(false);
       setDurationHours(24);
     }
-  }, [initialQuestion, initialChoices]);
+  }, [visible, initialQuestion, initialChoices]);
 
   const handleClearForm = () => {
     setQuestion('');
@@ -57,18 +58,36 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
   const handleCreatePoll = async () => {
     if (!question.trim() || choices.some((c) => !c.trim())) return;
     try {
-      const pollsRef = collection(db, 'events', eventId, 'polls');
       const expiresAt = new Date();
       expiresAt.setHours(expiresAt.getHours() + durationHours);
 
-      await addDoc(pollsRef, {
-        question: question.trim(),
-        allowMultiple,
-        options: choices.map((c) => ({ text: c.trim(), voterIds: [] })),
-        createdAt: serverTimestamp(),
-        status: 'active',
-        expiresAt: expiresAt,
-      });
+      if (pollIdToEdit) {
+        const pollRef = doc(db, 'events', eventId, 'polls', pollIdToEdit);
+        const pollDoc = await getDoc(pollRef);
+        const oldOptions = pollDoc.exists() ? pollDoc.data().options : [];
+        
+        const updatedOptions = choices.map((c, i) => ({
+          text: c.trim(),
+          voterIds: oldOptions[i] ? oldOptions[i].voterIds : []
+        }));
+
+        await updateDoc(pollRef, {
+          question: question.trim(),
+          allowMultiple,
+          options: updatedOptions,
+          expiresAt: expiresAt,
+        });
+      } else {
+        const pollsRef = collection(db, 'events', eventId, 'polls');
+        await addDoc(pollsRef, {
+          question: question.trim(),
+          allowMultiple,
+          options: choices.map((c) => ({ text: c.trim(), voterIds: [] })),
+          createdAt: serverTimestamp(),
+          status: 'active',
+          expiresAt: expiresAt,
+        });
+      }
       
       handleClearForm(); 
       onClose();
@@ -78,13 +97,37 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
     }
   };
 
+  // --- NEW: Handle Platform-Specific Selection ---
+  const handleDurationPress = () => {
+    if (Platform.OS === 'ios') {
+      const options = [...DURATION_OPTIONS.map(opt => opt.label), 'Cancel'];
+      const cancelButtonIndex = options.length - 1;
+
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options,
+          cancelButtonIndex,
+          title: 'Select Poll Duration',
+        },
+        (buttonIndex) => {
+          if (buttonIndex !== cancelButtonIndex) {
+            setDurationHours(DURATION_OPTIONS[buttonIndex].value);
+          }
+        }
+      );
+    } else {
+      // Opens the custom modal overlay for Web and Android
+      setIsDropdownOpen(true);
+    }
+  };
+
   return (
     <Modal visible={visible} animationType="fade" transparent>
       <View className="flex-1 justify-center items-center p-4">
         <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
         <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-md max-h-[90%] shadow-2xl z-10">
           <HStack className="justify-between items-center mb-6">
-            <Heading size="xl" className="text-zinc-50">Create a Poll</Heading>
+            <Heading size="xl" className="text-zinc-50">{pollIdToEdit ? 'Edit Poll' : 'Create a Poll'}</Heading>
             <HStack className="gap-2">
               <Button size="sm" variant="link" onPress={handleClearForm}>
                 <ButtonText className="text-red-400 font-semibold">Clear</ButtonText>
@@ -124,34 +167,13 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
                 <TouchableOpacity 
                   activeOpacity={0.7}
                   className="bg-zinc-800 border border-zinc-700 rounded-xl p-4 flex-row justify-between items-center"
-                  onPress={() => setIsDropdownOpen(!isDropdownOpen)}
+                  onPress={handleDurationPress}
                 >
                   <Text className="text-zinc-50 font-medium text-base">
                     {DURATION_OPTIONS.find(opt => opt.value === durationHours)?.label}
                   </Text>
-                  <Text className="text-zinc-400 text-xs">{isDropdownOpen ? '▲' : '▼'}</Text>
+                  <Text className="text-zinc-400 text-xs">▼</Text>
                 </TouchableOpacity>
-
-                {Platform.OS === 'web' && isDropdownOpen && (
-                  <View className="bg-zinc-800 border border-zinc-700 rounded-xl overflow-hidden mt-1 max-h-48">
-                    <ScrollView nestedScrollEnabled={true}>
-                      {DURATION_OPTIONS.map((option) => (
-                        <TouchableOpacity
-                          key={option.value}
-                          className={`p-4 border-b border-zinc-700/50 ${durationHours === option.value ? 'bg-zinc-700' : ''}`}
-                          onPress={() => {
-                            setDurationHours(option.value);
-                            setIsDropdownOpen(false);
-                          }}
-                        >
-                          <Text className={`font-medium ${durationHours === option.value ? 'text-blue-400' : 'text-zinc-300'}`}>
-                            {option.label}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                )}
               </VStack>
 
               <VStack className="gap-3">
@@ -188,45 +210,47 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
                 onPress={handleCreatePoll}
                 isDisabled={!question.trim() || choices.some((c) => !c.trim())}
               >
-                <ButtonText className="font-bold text-white">Publish Poll</ButtonText>
+                <ButtonText className="font-bold text-white">{pollIdToEdit ? 'Save Changes' : 'Publish Poll'}</ButtonText>
               </Button>
             </VStack>
           </ScrollView>
         </View>
 
-        {Platform.OS !== 'web' && isDropdownOpen && (
-          <View className="absolute top-0 bottom-0 left-0 right-0 justify-end z-50">
-            <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/70" onPress={() => setIsDropdownOpen(false)} />
-            <View className="bg-[#1c1c1e] rounded-t-[32px] pt-3 pb-10 px-4 shadow-2xl w-full max-w-md self-center">
-              <View className="w-10 h-1.5 bg-zinc-600 rounded-full self-center mb-6" />
-              <Text className="text-zinc-300 font-bold text-sm mb-3 ml-2 tracking-wide">Poll Duration</Text>
-              <View className="bg-zinc-800 rounded-2xl overflow-hidden">
-                <ScrollView className="max-h-96" showsVerticalScrollIndicator={false}>
-                  {DURATION_OPTIONS.map((option, index) => {
-                    const isSelected = durationHours === option.value;
-                    const isLast = index === DURATION_OPTIONS.length - 1;
-                    return (
-                      <TouchableOpacity
-                        key={option.value}
-                        activeOpacity={0.7}
-                        className={`flex-row justify-between items-center p-5 ${!isLast ? 'border-b border-zinc-700/50' : ''}`}
-                        onPress={() => {
-                          setDurationHours(option.value);
-                          setTimeout(() => setIsDropdownOpen(false), 200); 
-                        }}
-                      >
-                        <Text className={`text-base ${isSelected ? 'text-zinc-50 font-medium' : 'text-zinc-300'}`}>{option.label}</Text>
-                        <View className={`w-6 h-6 rounded-full border-2 items-center justify-center ${isSelected ? 'border-indigo-500' : 'border-zinc-500'}`}>
-                          {isSelected && <View className="w-3 h-3 rounded-full bg-indigo-500" />}
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
+        {/* --- WEB / ANDROID DURATION MODAL OVERLAY --- */}
+        {Platform.OS !== 'ios' && isDropdownOpen && (
+          <View className="absolute top-0 bottom-0 left-0 right-0 justify-center items-center z-50">
+            <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/60" onPress={() => setIsDropdownOpen(false)} />
+            
+            {/* CHANGED: Replaced w-[80%] max-w-xs with a fixed w-64 to keep it sleek and narrow */}
+            <View className="bg-zinc-800 rounded-2xl p-2 border border-zinc-700 shadow-2xl w-64 z-10">
+              
+              <Text className="text-zinc-400 font-bold text-xs uppercase tracking-wider text-center mt-3 mb-2">Select Duration</Text>
+              <ScrollView className="max-h-64" showsVerticalScrollIndicator={false}>
+                {DURATION_OPTIONS.map((option) => {
+                  const isSelected = durationHours === option.value;
+                  return (
+                    <TouchableOpacity
+                      key={option.value}
+                      className={`p-3 rounded-xl ${isSelected ? 'bg-zinc-700/50' : ''}`}
+                      onPress={() => {
+                        setDurationHours(option.value);
+                        setIsDropdownOpen(false);
+                      }}
+                    >
+                      <Text className={`text-center text-base ${isSelected ? 'text-blue-400 font-bold' : 'text-zinc-300 font-medium'}`}>
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+              <Button variant="link" className="mt-1" onPress={() => setIsDropdownOpen(false)}>
+                <ButtonText className="text-zinc-400">Cancel</ButtonText>
+              </Button>
             </View>
           </View>
         )}
+        
       </View>
     </Modal>
   );

@@ -7,6 +7,7 @@ import { Text } from '@/components/ui/text';
 import { Box } from '@/components/ui/box';
 import { Button, ButtonText } from '@/components/ui/button';
 import * as Clipboard from 'expo-clipboard';
+import { Eye } from 'lucide-react-native';
 
 interface EventHeaderProps {
   eventData: any;
@@ -17,9 +18,10 @@ interface EventHeaderProps {
   onBack: () => void;
   onShowQR: () => void;
   onOpenModal: (question: string) => void;
+  onShowParticipants: () => void;
 }
 
-export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, onBack, onShowQR, onOpenModal }: EventHeaderProps) {
+export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, onBack, onShowQR, onOpenModal, onShowParticipants }: EventHeaderProps) {
   const handleCopyLink = async () => {
     await Clipboard.setStringAsync(joinLink);
     alert('Join link copied to clipboard!'); 
@@ -107,7 +109,12 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
             </HStack>
 
             <HStack className="justify-between gap-6 items-center">
-              <Text className="text-zinc-400 font-medium">Going</Text>
+              <HStack className="items-center gap-2">
+                <Text className="text-zinc-400 font-medium">Going</Text>
+                <TouchableOpacity activeOpacity={0.7} onPress={onShowParticipants} className="p-1.5 bg-zinc-700/50 rounded-md border border-zinc-600/50">
+                  <Eye size={16} color="#a1a1aa" />
+                </TouchableOpacity>
+              </HStack>
               <Text className="text-zinc-50 font-semibold">{headcount} {headcount === 1 ? 'person' : 'people'}</Text>
             </HStack>
           </VStack>

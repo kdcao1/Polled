@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Stack, useRouter, usePathname, useLocalSearchParams } from 'expo-router';
+import { Stack, useRouter, usePathname } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import { useAuth } from '../hooks/useAuth';
@@ -20,31 +20,42 @@ export default function RootLayout() {
     if (isAuthLoading) return;
 
     const checkUserProfile = async () => {
+      // Define our route types
+      const inIndexScreen = pathname === '/'; 
+      const inOnboardingScreen = pathname === '/onboarding';
+      const inLoginScreen = pathname === '/login';
+      
+      const isPublicRoute = inIndexScreen || inLoginScreen;
+      
+      const isIntentionalAction = 
+        pathname === '/create' || 
+        pathname === '/join' || 
+        pathname.startsWith('/event/');
+
+      // 1. IF COMPLETELY LOGGED OUT
       if (!user) {
+        if (!isPublicRoute) {
+          router.replace('/'); // Boot unauthorized users to the landing page
+        }
         setIsProfileChecking(false);
         return;
       }
 
+      // 2. IF LOGGED IN (Check for Profile)
       try {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         const hasName = userDoc.exists() && userDoc.data().displayName;
-        
-        const inIndexScreen = pathname === '/'; 
-        const inOnboardingScreen = pathname === '/onboarding';
-        
-        const isIntentionalAction = 
-          pathname === '/create' || 
-          pathname === '/join' || 
-          pathname.startsWith('/event/');
 
         if (hasName) {
-          if (inIndexScreen || inOnboardingScreen) {
+          // Fully setup users shouldn't see landing, login, or onboarding
+          if (isPublicRoute || inOnboardingScreen) {
             router.replace('/dashboard');
           }
         } else {
+          // Logged in anonymously, but hasn't set a name yet
           if (isIntentionalAction) {
             router.replace(`/onboarding?next=${pathname}`);
-          } else if (!inIndexScreen && !inOnboardingScreen) {
+          } else if (!isPublicRoute && !inOnboardingScreen) {
             router.replace('/');
           }
         }
@@ -82,9 +93,11 @@ export default function RootLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="dashboard" options={{ headerShown: false }} />
           <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+          <Stack.Screen name="login" options={{ headerShown: false, presentation: 'modal' }} />
           <Stack.Screen name="create" options={{ title: 'New Event', presentation: 'modal' }} />
           <Stack.Screen name="join" options={{ title: 'Join Event', presentation: 'modal' }} />
           <Stack.Screen name="event/[id]" options={{ title: 'Polled', headerLeft: () => null }} />
+          <Stack.Screen name="edit/[id]" options={{ title: 'Edit Event', presentation: 'modal' }} />
         </Stack>
       </SafeAreaView>
     </GluestackUIProvider>

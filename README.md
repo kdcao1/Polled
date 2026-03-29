@@ -27,18 +27,16 @@ Polled is a real-time event coordination app built with **Expo**, **React Native
 
 ## TODO
 
-* Add in login page
 * creator can edit event details
-* see who is part of the event
 * duplicate user tracking through colors
 * be able to assign roles to specific users
 * be able to poll for who whats a specific role
 * stop refresh every time a user goes onto the dashboard
 * fix mobile time modal
 * change time selection to either people can enter blocks of available time or allow users to add a choice onto the time poll
-* cleanup the finished poll design + define/show which choice won
 * allow creator to rerun poll
 * add in notifications
 * add in analytics
-* allow creator to stop a poll early
 * allow a poll to stop when x poeple have voted
+* connect google auth
+* get domain and host

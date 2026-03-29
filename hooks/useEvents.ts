@@ -52,8 +52,8 @@ export const useEvents = () => {
         joinedEvents: arrayUnion(secureEventId)
       }, { merge: true });
 
-      // 5. Route to the secure URL
-      router.push(`/event/${secureEventId}`);
+      // 5. Route to the secure URL using REPLACE so the form is cleared from history
+      router.replace(`/event/${secureEventId}`);
 
     } catch (error) {
       console.error("Error creating event: ", error);

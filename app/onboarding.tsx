@@ -4,7 +4,7 @@ import { VStack } from '@/components/ui/vstack';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
-import { Button, ButtonText } from '@/components/ui/button';
+import { Button, ButtonText, ButtonSpinner } from '@/components/ui/button';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
@@ -26,10 +26,15 @@ export default function OnboardingScreen() {
         joinedEvents: [] 
       }, { merge: true });
 
+      // 1. Always set the base screen to the Dashboard first
+      router.replace('/dashboard');
+      
+      // 2. If they were trying to go to /create or /join, push that modal on top
       if (typeof next === 'string') {
-        router.replace(next as any);
-      } else {
-        router.replace('/dashboard');
+        // A tiny timeout ensures Expo has a millisecond to mount the Dashboard underneath
+        setTimeout(() => {
+          router.push(next as any);
+        }, 100);
       }
 
     } catch (error) {
@@ -50,14 +55,15 @@ export default function OnboardingScreen() {
         </VStack>
         
         <VStack className="gap-4">
-          <Input variant="outline" size="xl" className="border-zinc-700">
+          <Input variant="outline" size="xl" className="border-zinc-700 bg-zinc-800">
             <InputField
-              placeholder="full name or nickname would be nice..."
+              placeholder="Full name or nickname..."
               placeholderTextColor="#a1a1aa"
               value={name}
               onChangeText={setName}
               className="text-zinc-50"
               autoFocus
+              onSubmitEditing={handleSaveName}
             />
           </Input>
           
@@ -68,9 +74,11 @@ export default function OnboardingScreen() {
             onPress={handleSaveName}
             isDisabled={isSaving || !name.trim()}
           >
-            <ButtonText className="font-bold text-white">
-              {isSaving ? "Saving..." : "Continue"}
-            </ButtonText>
+            {isSaving ? (
+              <ButtonSpinner color="white" />
+            ) : (
+              <ButtonText className="font-bold text-white">Continue</ButtonText>
+            )}
           </Button>
         </VStack>
 
