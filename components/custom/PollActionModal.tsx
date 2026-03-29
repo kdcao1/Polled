@@ -12,7 +12,8 @@ export default function PollActionModal({
   onEdit,
   onDelete,
   onEndEarly,
-  onRerun
+  onRerun,
+  onNudge
 }: any) {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [showConfirmEnd, setShowConfirmEnd] = useState(false);
@@ -39,20 +40,32 @@ export default function PollActionModal({
                 <Heading size="xl" className="text-zinc-50">Poll Options</Heading>
                 <Text className="text-zinc-400 text-sm" numberOfLines={1}>"{poll.question}"</Text>
               </VStack>
+              
               <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onEdit(poll); }}>
                 <ButtonText className="font-bold text-zinc-50">Edit Poll</ButtonText>
               </Button>
+              
               <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onRerun(poll); }}>
                 <ButtonText className="font-bold text-zinc-50">Rerun Poll</ButtonText>
               </Button>
+              
+              {/* --- GROUPED ACTIVE POLL ACTIONS --- */}
               {!isExpired && (
-                <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => setShowConfirmEnd(true)}>
-                  <ButtonText className="font-bold text-zinc-50">End Early</ButtonText>
-                </Button>
+                <>
+                  <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onNudge(poll); }}>
+                    <ButtonText className="font-bold text-zinc-50">Nudge Invitees</ButtonText>
+                  </Button>
+
+                  <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => setShowConfirmEnd(true)}>
+                    <ButtonText className="font-bold text-zinc-50">End Early</ButtonText>
+                  </Button>
+                </>
               )}
+              
               <Button size="xl" variant="outline" className="border-red-500/30 bg-red-500/10 w-full" onPress={() => setShowConfirmDelete(true)}>
                 <ButtonText className="font-bold text-red-500">Delete Poll</ButtonText>
               </Button>
+              
               <Button size="md" variant="link" className="mt-2" onPress={onClose}>
                 <ButtonText className="text-zinc-400">Cancel</ButtonText>
               </Button>

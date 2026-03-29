@@ -6,12 +6,14 @@ import { useAuth } from '../hooks/useAuth';
 import { ActivityIndicator, View } from 'react-native';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../config/firebaseConfig';
+import { useNotifications } from '@/hooks/useNotifications';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import '../global.css';
 
 export default function RootLayout() {
   const { user, isLoading: isAuthLoading } = useAuth();
   const [isProfileChecking, setIsProfileChecking] = useState(true);
-  
+  const { scheduleLocalNotification } = useNotifications();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -79,27 +81,29 @@ export default function RootLayout() {
   }
 
   return (
-    <GluestackUIProvider mode="dark">
-      <SafeAreaView className="flex-1 bg-zinc-900">
-        <Stack
-          screenOptions={{
-            headerStyle: { backgroundColor: '#18181b' },
-            headerTintColor: '#f4f4f5',
-            headerShown: false,
-            headerShadowVisible: false,
-            contentStyle: { backgroundColor: '#18181b' },
-          }}
-        >
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="dashboard" options={{ headerShown: false }} />
-          <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-          <Stack.Screen name="login" options={{ headerShown: false, presentation: 'modal' }} />
-          <Stack.Screen name="create" options={{ title: 'New Event', presentation: 'modal' }} />
-          <Stack.Screen name="join" options={{ title: 'Join Event', presentation: 'modal' }} />
-          <Stack.Screen name="event/[id]" options={{ title: 'Polled', headerLeft: () => null }} />
-          <Stack.Screen name="edit/[id]" options={{ title: 'Edit Event', presentation: 'modal' }} />
-        </Stack>
-      </SafeAreaView>
-    </GluestackUIProvider>
+    <KeyboardProvider>
+      <GluestackUIProvider mode="dark">
+        <SafeAreaView className="flex-1 bg-zinc-900">
+          <Stack
+            screenOptions={{
+              headerStyle: { backgroundColor: '#18181b' },
+              headerTintColor: '#f4f4f5',
+              headerShown: false,
+              headerShadowVisible: false,
+              contentStyle: { backgroundColor: '#18181b' },
+            }}
+          >
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="dashboard" options={{ headerShown: false }} />
+            <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+            <Stack.Screen name="login" options={{ headerShown: false, presentation: 'card' }} />
+            <Stack.Screen name="create" options={{ title: 'New Event', presentation: 'card' }} />
+            <Stack.Screen name="join" options={{ title: 'Join Event', presentation: 'card' }} />
+            <Stack.Screen name="event/[id]" options={{ title: 'Polled', headerLeft: () => null }} />
+            <Stack.Screen name="edit/[id]" options={{ title: 'Edit Event', presentation: 'modal' }} />
+          </Stack>
+        </SafeAreaView>
+      </GluestackUIProvider>
+    </KeyboardProvider>
   );
 }

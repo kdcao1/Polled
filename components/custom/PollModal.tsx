@@ -7,8 +7,9 @@ import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { collection, addDoc, serverTimestamp, doc, updateDoc, getDoc } from 'firebase/firestore';
-import { db } from '../../config/firebaseConfig'; // Adjust path if needed
+import { collection, addDoc, serverTimestamp, doc, updateDoc, getDoc, query, where, getDocs } from 'firebase/firestore';
+import { db, auth } from '../../config/firebaseConfig';
+import { useNotifications } from '../../hooks/useNotifications';
 
 interface PollModalProps {
   visible: boolean;
@@ -36,6 +37,51 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
   const [allowMultiple, setAllowMultiple] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [durationHours, setDurationHours] = useState<number>(24);
+
+  const { scheduleLocalNotification } = useNotifications();
+
+  const sendPushToEventMembers = async (title: string, body: string) => {
+    try {
+      // 1. Find all users who have this eventId in their "joinedEvents" array
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('joinedEvents', 'array-contains', eventId));
+      const snapshot = await getDocs(q);
+
+      // 2. Extract their Push Tokens (ignoring users who haven't granted permission or the person sending it)
+      const currentUid = auth.currentUser?.uid;
+      const tokens: string[] = [];
+      
+      snapshot.forEach((doc) => {
+        const userData = doc.data();
+        if (doc.id !== currentUid && userData.expoPushToken) {
+          tokens.push(userData.expoPushToken);
+        }
+      });
+
+      if (tokens.length === 0) return; // No one to notify!
+
+      // 3. Send the payload to Expo's Server
+      const message = {
+        to: tokens, // Expo allows sending an array of up to 100 tokens at once!
+        sound: 'default',
+        title: title,
+        body: body,
+      };
+
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Accept-encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(message),
+      });
+
+    } catch (error) {
+      console.error("Error sending push notifications:", error);
+    }
+  };
 
   useEffect(() => {
     if (visible) {
@@ -88,6 +134,11 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
           expiresAt: expiresAt,
         });
       }
+
+      await sendPushToEventMembers(
+        "New Poll Available! 🗳️", 
+        question.trim()
+      );
       
       handleClearForm(); 
       onClose();

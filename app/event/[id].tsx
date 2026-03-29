@@ -16,9 +16,10 @@ import QRModal from '@/components/custom/QRModal';
 import EmptyState from '@/components/custom/EmptyState';
 import PollActionModal from '@/components/custom/PollActionModal';
 import ParticipantsModal from '@/components/custom/ParticipantsModal';
-import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc, getDocs, where} from 'firebase/firestore';
 import { Alert, View, ScrollView, TouchableOpacity, useWindowDimensions, Share } from 'react-native';
 import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
+
 
 export default function EventScreen() {
   const { id } = useLocalSearchParams();
@@ -45,6 +46,63 @@ export default function EventScreen() {
   const openModal = (question = '', choices = ['', '']) => {
     setModalConfig({ question, choices, pollIdToEdit: undefined });
     setIsModalOpen(true);
+  };
+
+  const sendPushToEventMembers = async (title: string, body: string) => {
+    try {
+      // Find all users who have joined this specific event
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('joinedEvents', 'array-contains', id as string));
+      const snapshot = await getDocs(q);
+
+      const currentUid = auth.currentUser?.uid;
+      const tokens: string[] = [];
+      
+      // Extract their push tokens
+      snapshot.forEach((docSnap) => {
+        const userData = docSnap.data();
+        // Don't send a notification to the person pressing the nudge button!
+        if (docSnap.id !== currentUid && userData.expoPushToken) {
+          tokens.push(userData.expoPushToken);
+        }
+      });
+
+      if (tokens.length === 0) {
+        Alert.alert("No one to nudge!", "None of the other users have notifications enabled.");
+        return; 
+      }
+
+      // Send the payload to Expo's Server
+      const message = {
+        to: tokens, 
+        sound: 'default',
+        title: title,
+        body: body,
+      };
+
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Accept-encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(message),
+      });
+
+    } catch (error) {
+      console.error("Error sending push notifications:", error);
+    }
+  };
+
+  // --- 2. The handler function you pass to your Poll components ---
+  const handleNudge = async (poll: any) => {
+    await sendPushToEventMembers(
+      "Don't forget to vote! ⏰", 
+      `The poll "${poll.question}" is waiting for your response.`
+    );
+    
+    Alert.alert("Nudge Sent!", "A reminder has been sent to everyone in the event.");
   };
 
   const handleNativeShare = async () => {
@@ -405,6 +463,7 @@ export default function EventScreen() {
         onEndEarly={handleEndPollEarly}
         onEdit={handleEditPoll}
         onRerun={handleRerunPoll}
+        onNudge={handleNudge}
       />
       <ParticipantsModal visible={isParticipantsModalOpen} onClose={() => setIsParticipantsModalOpen(false)} voterIds={Array.from(uniqueVoters) as string[]} />
     </Box>
