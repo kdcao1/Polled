@@ -5,6 +5,8 @@ import { initializeAuth, browserLocalPersistence } from 'firebase/auth';
 import { getReactNativePersistence } from 'firebase/auth';
 import { Platform } from 'react-native';
 import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+import { getAnalytics, isSupported, Analytics, logEvent } from 'firebase/analytics';
+import nativeAnalytics from '@react-native-firebase/analytics';
 
 const firebaseConfig = {
   apiKey: "AIzaSyBdk_5ryzPLg5-mZ3BDP4WJHoFkXOyJoHo",
@@ -25,3 +27,27 @@ const persistence = Platform.OS === 'web'
   : getReactNativePersistence(ReactNativeAsyncStorage);
 
 export const auth = initializeAuth(app, { persistence });
+
+export let analytics: Analytics | null = null;
+isSupported().then((supported) => {
+  if (supported) {
+    analytics = getAnalytics(app);
+  }
+});
+
+export const logAppEvent = async (eventName: string, params?: Record<string, any>) => {
+  try {
+    if (Platform.OS === 'web') {
+      // Use the Web SDK
+      if (analytics) {
+        logEvent(analytics, eventName, params);
+        console.log(`📊 [Web Analytics Sent]: ${eventName}`, params);
+      }
+    } else {
+      // Use the Native iOS/Android SDK
+      await nativeAnalytics().logEvent(eventName, params);
+    }
+  } catch (error) {
+    console.error("Analytics Error:", error);
+  }
+};

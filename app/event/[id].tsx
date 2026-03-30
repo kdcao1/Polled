@@ -8,7 +8,7 @@ import { Button, ButtonText } from '@/components/ui/button';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { db, auth } from '@/config/firebaseConfig';
+import { db, auth, logAppEvent } from '@/config/firebaseConfig';
 import PollModal from '@/components/custom/PollModal';
 import PollCard from '@/components/custom/PollCard';
 import EventHeader from '@/components/custom/EventHeader';
@@ -19,6 +19,7 @@ import ParticipantsModal from '@/components/custom/ParticipantsModal';
 import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc, getDocs, where} from 'firebase/firestore';
 import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share } from 'react-native';
 import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
+
 
 
 export default function EventScreen() {
@@ -246,6 +247,12 @@ export default function EventScreen() {
         }
 
         transaction.update(pollRef, { options: newOptions });
+      });
+
+      await logAppEvent('vote_cast', {
+        poll_id: pollId,
+        is_multiple_choice: allowMultipleVotes,
+        debug_mode: true
       });
       
     } catch (error: any) {
