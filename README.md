@@ -38,7 +38,7 @@ https://polled.app
 * test notifications
 * link quick polls to the actual poll
 * create admin panel
-* * see analytics
-* * control users
-* * maintenance mode
-* * flush stale events defined by no activity in n days
+  * see analytics
+  * control users
+  * maintenance mode
+  * flush stale events defined by no activity in n days
