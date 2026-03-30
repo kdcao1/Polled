@@ -5,16 +5,18 @@ import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { collection, query, where, getDocs, doc, setDoc, arrayUnion } from 'firebase/firestore';
 import { KeyboardAvoidingView, Platform } from 'react-native';
 import { db, auth } from '../config/firebaseConfig';
 
 export default function JoinScreen() {
-  const [joinCode, setJoinCode] = useState('');
+  const router = useRouter();
+  const params = useLocalSearchParams();
+
+  const [joinCode, setJoinCode] = useState((params.code as string) || '');
   const [isJoining, setIsJoining] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const router = useRouter();
 
   const handleJoin = async () => {
     const code = joinCode.trim().toUpperCase();
@@ -45,7 +47,7 @@ export default function JoinScreen() {
       }, { merge: true });
 
       // 4. Route them to the event
-      router.push(`/event/${secureEventId}`);
+      router.replace(`/event/${secureEventId}`);
 
     } catch (error) {
       console.error("Error joining event:", error);

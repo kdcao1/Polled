@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Stack, useRouter, usePathname } from 'expo-router';
+import { Stack, useRouter, usePathname, useGlobalSearchParams } from 'expo-router'; // Add useGlobalSearchParams
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import { useAuth } from '../hooks/useAuth';
@@ -14,64 +14,66 @@ export default function RootLayout() {
   const { user, isLoading: isAuthLoading } = useAuth();
   const [isProfileChecking, setIsProfileChecking] = useState(true);
   const { scheduleLocalNotification } = useNotifications();
+  
   const pathname = usePathname();
   const router = useRouter();
+  const params = useGlobalSearchParams();
 
-  // THE GLOBAL ROUTE GUARD
   useEffect(() => {
     if (isAuthLoading) return;
 
     const checkUserProfile = async () => {
-      // Define our route types
-      const inIndexScreen = pathname === '/'; 
-      const inOnboardingScreen = pathname === '/onboarding';
-      const inLoginScreen = pathname === '/login';
-      
-      const isPublicRoute = inIndexScreen || inLoginScreen;
-      
-      const isIntentionalAction = 
-        pathname === '/create' || 
-        pathname === '/join' || 
-        pathname.startsWith('/event/');
-
-      // 1. IF COMPLETELY LOGGED OUT
-      if (!user) {
-        if (!isPublicRoute) {
-          router.replace('/'); // Boot unauthorized users to the landing page
-        }
-        setIsProfileChecking(false);
-        return;
-      }
-
-      // 2. IF LOGGED IN (Check for Profile)
       try {
+        // 1. Move the URL processing INSIDE the try block
+        const searchString = new URLSearchParams(params as any).toString();
+        const fullPath = searchString ? `${pathname}?${searchString}` : pathname;
+        const encodedPath = encodeURIComponent(fullPath);
+
+        const inIndexScreen = pathname === '/'; 
+        const inOnboardingScreen = pathname === '/onboarding';
+        const inLoginScreen = pathname === '/login';
+        const isPublicRoute = inIndexScreen || inLoginScreen;
+        
+        const isIntentionalAction = 
+          pathname === '/create' || 
+          pathname === '/join' || 
+          pathname.startsWith('/event/');
+
+        // 2. IF COMPLETELY LOGGED OUT
+        if (!user) {
+          if (!isPublicRoute) {
+            router.replace(`/?next=${encodedPath}`);
+          }
+          return; // The finally block will still run!
+        }
+
+        // 3. IF LOGGED IN (Check for Profile)
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         const hasName = userDoc.exists() && userDoc.data().displayName;
 
         if (hasName) {
-          // Fully setup users shouldn't see landing, login, or onboarding
           if (isPublicRoute || inOnboardingScreen) {
             router.replace('/dashboard');
           }
         } else {
-          // Logged in anonymously, but hasn't set a name yet
           if (isIntentionalAction) {
-            router.replace(`/onboarding?next=${pathname}`);
+            router.replace(`/onboarding?next=${encodedPath}`);
           } else if (!isPublicRoute && !inOnboardingScreen) {
-            router.replace('/');
+            router.replace('/onboarding');
           }
         }
       } catch (error) {
-        console.error("Error checking global profile:", error);
+        // Now if the URL parsing or Firebase fails, it logs here instead of breaking the app
+        console.error("Routing Guard Error:", error);
       } finally {
+        // This is guaranteed to run, turning off the loading screen
         setIsProfileChecking(false);
       }
     };
 
     checkUserProfile();
-  }, [user, isAuthLoading, pathname]);
+  }, [user, isAuthLoading, pathname]); 
 
-  // Block the UI from rendering until BOTH Firebase Auth and the Profile Check are done
   if (isAuthLoading || isProfileChecking) {
     return (
       <View className="flex-1 justify-center items-center bg-zinc-900">

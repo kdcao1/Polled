@@ -85,7 +85,7 @@ export default function DashboardScreen() {
           </HStack>
         </HStack>
 
-        {loading ? (
+        {loading && events.length === 0 ? (
           <ActivityIndicator size="large" color="#3b82f6" className="mt-10" />
         ) : events.length === 0 ? (
           <VStack className="items-center mt-20 gap-6">

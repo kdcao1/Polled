@@ -17,7 +17,7 @@ import EmptyState from '@/components/custom/EmptyState';
 import PollActionModal from '@/components/custom/PollActionModal';
 import ParticipantsModal from '@/components/custom/ParticipantsModal';
 import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc, getDocs, where} from 'firebase/firestore';
-import { Alert, View, ScrollView, TouchableOpacity, useWindowDimensions, Share } from 'react-native';
+import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share } from 'react-native';
 import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
 
 
@@ -33,7 +33,6 @@ export default function EventScreen() {
   const [loading, setLoading] = useState(true);
   const [isOrganizer, setIsOrganizer] = useState(false);
 
-  // --- NEW: Added 'details' to the tab state ---
   const [activeTab, setActiveTab] = useState<'details' | 'active' | 'answered'>('details');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalConfig, setModalConfig] = useState<{question?: string, choices?: string[], pollIdToEdit?: string}>({});
@@ -41,8 +40,8 @@ export default function EventScreen() {
   const [actionPoll, setActionPoll] = useState<any>(null);
   const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
 
-  const joinLink = eventData?.joinCode ? `https://polled.app/join/${eventData.joinCode}` : `https://polled.app/join/${id}`;
-
+  const joinLink = `https://polled.app/join?code=${eventData?.joinCode || ''}`;
+  
   const openModal = (question = '', choices = ['', '']) => {
     setModalConfig({ question, choices, pollIdToEdit: undefined });
     setIsModalOpen(true);
@@ -68,7 +67,17 @@ export default function EventScreen() {
       });
 
       if (tokens.length === 0) {
-        Alert.alert("No one to nudge!", "None of the other users have notifications enabled.");
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-amber-400 font-bold text-sm">No one to nudge!</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">None of the other users have notifications enabled.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
         return; 
       }
 
@@ -102,16 +111,54 @@ export default function EventScreen() {
       `The poll "${poll.question}" is waiting for your response.`
     );
     
-    Alert.alert("Nudge Sent!", "A reminder has been sent to everyone in the event.");
+    toast.show({
+      placement: "top",
+      render: ({ id: toastId }) => (
+        <Toast nativeID={toastId} className="bg-zinc-800 border border-blue-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+          <VStack>
+            <ToastTitle className="text-blue-400 font-bold text-sm">Nudge Sent!</ToastTitle>
+            <ToastDescription className="text-zinc-300 text-xs mt-0.5">A reminder has been sent to everyone in the event.</ToastDescription>
+          </VStack>
+        </Toast>
+      ),
+    });
   };
 
   const handleNativeShare = async () => {
     try {
-      await Share.share({
+      const result = await Share.share({
         message: `Join my event "${eventData?.title}" on Polled! Code: ${eventData?.joinCode}\n${joinLink}`,
       });
+
+      // Show a success toast if they actually completed the share action
+      if (result.action === Share.sharedAction) {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-green-400 font-bold text-sm">Shared!</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">Thanks for spreading the word about the event.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      }
+      // Note: If result.action === Share.dismissedAction, we do nothing (they just closed the menu)
+
     } catch (error) {
-      console.error('Error sharing:', error);
+      // Show an error toast if the native share sheet fails to open
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-red-400 font-bold text-sm">Sharing Failed</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Something went wrong trying to open the share menu.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
     }
   };
 
@@ -203,7 +250,17 @@ export default function EventScreen() {
       
     } catch (error: any) {
       if (error.message === "EXPIRED") {
-        Alert.alert('Poll Ended', 'This poll is no longer accepting votes.');
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-red-400 font-bold text-sm">Poll Ended</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">This poll is no longer accepting votes.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
       } else {
         console.error('Error updating vote:', error);
       }

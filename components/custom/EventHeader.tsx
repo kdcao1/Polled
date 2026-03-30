@@ -8,6 +8,7 @@ import { Box } from '@/components/ui/box';
 import { Button, ButtonText } from '@/components/ui/button';
 import * as Clipboard from 'expo-clipboard';
 import { Eye } from 'lucide-react-native';
+import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 
 interface EventHeaderProps {
   eventData: any;
@@ -22,9 +23,22 @@ interface EventHeaderProps {
 }
 
 export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, onBack, onShowQR, onOpenModal, onShowParticipants }: EventHeaderProps) {
+  const toast = useToast();
+
   const handleCopyLink = async () => {
     await Clipboard.setStringAsync(joinLink);
-    alert('Join link copied to clipboard!'); 
+    
+    toast.show({
+      placement: "top",
+      render: ({ id: toastId }) => (
+        <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+          <VStack>
+            <ToastTitle className="text-green-400 font-bold text-sm">Copied!</ToastTitle>
+            <ToastDescription className="text-zinc-300 text-xs mt-0.5">Join link copied to clipboard.</ToastDescription>
+          </VStack>
+        </Toast>
+      ),
+    });
   };
 
   const handleShare = async () => {

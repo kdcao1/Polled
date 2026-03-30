@@ -12,6 +12,9 @@ import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
 import { auth } from '../config/firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
+
+WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -21,7 +24,6 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  // --- REUSABLE TOAST HELPER ---
   const showToast = (title: string, description: string, type: 'success' | 'error') => {
     toast.show({
       placement: "top",
@@ -47,7 +49,7 @@ export default function LoginScreen() {
   // GOOGLE LOGIN SETUP
   // -------------------------------------------------------------------------
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: '1059076773398-0oicat1eqqohtsrhrajpbsm67spk2u9s.apps.googleusercontent.com',
+    webClientId: '1059076773398-0oicat1eqqohtsrhrajpbsm67spk2u9s.apps.googleusercontent.com',
     iosClientId: '79016124142-vstsqihv3ahndlhirremvhdtl8mt99j0.apps.googleusercontent.com',
   });
 
@@ -64,7 +66,6 @@ export default function LoginScreen() {
       const credential = GoogleAuthProvider.credential(idToken);
       await signInWithCredential(auth, credential);
       
-      // Use replace() instead of push() so they can't swipe back to the login screen!
       router.replace('/dashboard');
 
     } catch (error: any) {
