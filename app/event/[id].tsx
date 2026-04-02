@@ -369,7 +369,7 @@ export default function EventScreen() {
 
         transaction.update(pollRef, { options: newOptions });
       });
-      trackEvent(updatedItemType === 'role'
+      trackEvent(roleAction
         ? (roleAction === 'unclaimed' ? 'role_unclaimed' : 'role_claimed')
         : 'poll_voted', {
         event_id: id as string,
