@@ -28,17 +28,14 @@ https://polled.app
 
 ## TODO
 
-* duplicate user tracking through colors
-* be able to assign roles to specific users
-* be able to poll for who whats a specific role
 * fix mobile time modal
 * change time selection to either people can enter blocks of available time or allow users to add a choice onto the time poll
-* add in analytics
-* allow a poll to stop when x poeple have voted
 * test notifications
-* link quick polls to the actual poll
 * create admin panel
   * see analytics
   * control users
   * maintenance mode
   * flush stale events defined by no activity in n days
+* replace:
+    * `YOUR_APPLE_TEAM_ID` with your Apple Developer Team ID
+    * `YOUR_RELEASE_SHA256_FINGERPRINT` with the SHA-256 fingerprint from the Android signing certificate used for production

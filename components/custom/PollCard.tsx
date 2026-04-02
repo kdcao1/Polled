@@ -6,6 +6,7 @@ import { HStack } from '@/components/ui/hstack';
 import { Text } from '@/components/ui/text';
 import { Box } from '@/components/ui/box';
 import { Button, ButtonText } from '@/components/ui/button';
+import { getEventItemType, getResponseCount, isEventItemExpired, isRoleItemFull } from '@/utils/eventItems';
 
 interface PollCardProps {
   poll: any;
@@ -32,39 +33,41 @@ const formatTimeLeft = (expirationDate: Date) => {
 };
 
 export default function PollCard({ poll, compact = false, isOrganizer = false, showResults = false, currentUid, onVote, onActionPress }: PollCardProps) {
-  const totalVotes = poll.options.reduce((s: number, o: any) => s + o.voterIds.length, 0);
+  const itemType = getEventItemType(poll);
+  const isRole = itemType === 'role';
+  const totalVotes = getResponseCount(poll);
   const expiresAtDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : (poll.expiresAt ? new Date(poll.expiresAt) : null);
-  
-  const [isExpired, setIsExpired] = useState(() => expiresAtDate ? new Date() > expiresAtDate : false);
-  const [timeLeft, setTimeLeft] = useState(() => expiresAtDate && !isExpired ? formatTimeLeft(expiresAtDate) : '');
+
+  const [isExpired, setIsExpired] = useState(() => isEventItemExpired(poll));
+  const [timeLeft, setTimeLeft] = useState(() => {
+    if (!expiresAtDate || isExpired || poll.endCondition === 'vote_count') return '';
+    return formatTimeLeft(expiresAtDate);
+  });
 
   const expiresAtMs = expiresAtDate?.getTime();
 
   useEffect(() => {
-    if (expiresAtDate) {
-      const expired = new Date() > expiresAtDate;
-      setIsExpired(expired);
-      if (!expired) {
-        setTimeLeft(formatTimeLeft(expiresAtDate));
-      }
+    setIsExpired(isEventItemExpired(poll));
+    if (expiresAtDate && !isEventItemExpired(poll) && poll.endCondition !== 'vote_count') {
+      setTimeLeft(formatTimeLeft(expiresAtDate));
     }
-  }, [expiresAtMs]);
+  }, [poll, expiresAtMs]);
 
   const [isEditingMultiple, setIsEditingMultiple] = useState(false);
   const [localSelections, setLocalSelections] = useState<number[]>([]);
 
   useEffect(() => {
-    if (!isEditingMultiple && poll?.options && currentUid) {
+    if (!isEditingMultiple && poll?.options && currentUid && !isRole) {
       setLocalSelections(
         poll.options
           .map((o: any, i: number) => (o.voterIds.includes(currentUid) ? i : -1))
           .filter((i: number) => i !== -1)
       );
     }
-  }, [poll, currentUid, isEditingMultiple]);
+  }, [poll, currentUid, isEditingMultiple, isRole]);
 
   useEffect(() => {
-    if (!expiresAtDate || isExpired) return;
+    if (!expiresAtDate || isExpired || poll.endCondition === 'vote_count' || isRole) return;
     const interval = setInterval(() => {
       if (new Date() > expiresAtDate) {
         setIsExpired(true);
@@ -74,18 +77,14 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
       }
     }, 60000);
     return () => clearInterval(interval);
-  }, [expiresAtMs, isExpired]);
+  }, [expiresAtMs, isExpired, poll.endCondition, isRole]);
 
   const displayResults = showResults || isExpired;
-
-  const maxVotes = Math.max(0, ...poll.options.map((o: any) => o.voterIds.length));
-  const winners = poll.options.filter((o: any) => o.voterIds.length === maxVotes && maxVotes > 0);
-
   const pulseAnim = useRef(new Animated.Value(0.1)).current;
 
   useEffect(() => {
     let animation: Animated.CompositeAnimation | null = null;
-    if (isExpired && totalVotes > 0) {
+    if (!isRole && isExpired && totalVotes > 0) {
       animation = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
@@ -105,7 +104,122 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
     return () => {
       if (animation) animation.stop();
     };
-  }, [isExpired, totalVotes, pulseAnim]);
+  }, [isExpired, totalVotes, pulseAnim, isRole]);
+
+  const roleSelection = poll.options?.[0];
+  const roleCount = roleSelection?.voterIds?.length ?? 0;
+  const roleIsSelected = !!currentUid && !!roleSelection?.voterIds?.includes(currentUid);
+  const roleIsFull = isRoleItemFull(poll);
+  const roleRemaining = poll.slotLimit != null ? Math.max(poll.slotLimit - roleCount, 0) : null;
+
+  const maxVotes = !isRole ? Math.max(0, ...poll.options.map((o: any) => o.voterIds.length)) : 0;
+  const winners = !isRole ? poll.options.filter((o: any) => o.voterIds.length === maxVotes && maxVotes > 0) : [];
+
+  const renderTag = (label: string, colors: { backgroundColor: string; borderColor: string; textColor: string }) => (
+    <Box
+      className="px-2 py-1 rounded border justify-center"
+      style={{
+        backgroundColor: colors.backgroundColor,
+        borderColor: colors.borderColor,
+      }}
+    >
+      <Text
+        className="text-xs font-bold uppercase tracking-wider leading-none"
+        style={{ color: colors.textColor }}
+      >
+        {label}
+      </Text>
+    </Box>
+  );
+
+  const renderStatusBadge = () => {
+    if (isRole) {
+      if (roleIsFull) {
+        return renderTag('Filled', {
+          backgroundColor: 'rgba(16, 185, 129, 0.18)',
+          borderColor: 'rgba(52, 211, 153, 0.5)',
+          textColor: '#a7f3d0',
+        });
+      }
+
+      if (poll.slotLimit == null) {
+        return renderTag('Open', {
+          backgroundColor: 'rgba(14, 165, 233, 0.16)',
+          borderColor: 'rgba(56, 189, 248, 0.45)',
+          textColor: '#bae6fd',
+        });
+      }
+
+      return renderTag(`${roleRemaining} left`, {
+        backgroundColor: 'rgba(30, 64, 175, 0.28)',
+        borderColor: 'rgba(59, 130, 246, 0.4)',
+        textColor: '#93c5fd',
+      });
+    }
+
+    if (isExpired) {
+      return renderTag('Ended', {
+        backgroundColor: 'rgba(239, 68, 68, 0.18)',
+        borderColor: 'rgba(248, 113, 113, 0.5)',
+        textColor: '#fca5a5',
+      });
+    }
+
+    if (poll.endCondition === 'vote_count' && poll.targetVoteCount) {
+      return renderTag(`${totalVotes} / ${poll.targetVoteCount} votes`, {
+        backgroundColor: 'rgba(30, 64, 175, 0.28)',
+        borderColor: 'rgba(59, 130, 246, 0.4)',
+        textColor: '#60a5fa',
+      });
+    }
+
+    if (expiresAtDate) {
+      return renderTag(timeLeft, {
+        backgroundColor: 'rgba(30, 64, 175, 0.28)',
+        borderColor: 'rgba(59, 130, 246, 0.4)',
+        textColor: '#60a5fa',
+      });
+    }
+
+    return null;
+  };
+
+  const renderRoleBody = () => {
+    const roleActionLabel = roleIsSelected ? 'Leave Role' : roleIsFull ? 'Filled' : 'Take Role';
+
+    return (
+      <VStack className={compact ? 'gap-3 mt-1' : 'gap-3 mt-2'}>
+        <View className={`rounded-lg border border-zinc-700 bg-zinc-900/50 ${compact ? 'p-3' : 'p-4'}`}>
+          <HStack className="justify-between items-center gap-3">
+            <VStack className="flex-1 gap-1">
+              <Text className={`text-zinc-100 font-semibold ${compact ? 'text-sm' : 'text-base'}`}>
+                {poll.slotLimit == null ? 'Unlimited spots' : `${roleCount} of ${poll.slotLimit} taken`}
+              </Text>
+              <Text className={`text-zinc-400 ${compact ? 'text-xs' : 'text-sm'}`}>
+                {roleIsSelected
+                  ? 'You are signed up for this role.'
+                  : roleIsFull
+                    ? 'All spots have been claimed.'
+                    : 'Claim this role if you want to take it on.'}
+              </Text>
+            </VStack>
+            <Button
+              size={compact ? 'sm' : 'md'}
+              action={roleIsSelected ? 'secondary' : 'primary'}
+              variant={roleIsSelected ? 'outline' : 'solid'}
+              className={roleIsSelected ? 'border-zinc-600 bg-zinc-800' : 'bg-blue-600 border-0'}
+              isDisabled={roleIsFull && !roleIsSelected}
+              onPress={() => onVote(poll.id, 0, poll.options, false)}
+            >
+              <ButtonText className={roleIsSelected ? 'text-zinc-100 font-bold' : 'text-white font-bold'}>
+                {roleActionLabel}
+              </ButtonText>
+            </Button>
+          </HStack>
+        </View>
+      </VStack>
+    );
+  };
 
   return (
     <VStack className={`bg-zinc-800 rounded-xl border ${isExpired ? 'border-zinc-700/50 opacity-80' : 'border-zinc-700'} gap-2 ${compact ? 'p-4' : 'p-5 gap-4'}`}>
@@ -115,25 +229,48 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
             <Text className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}>
               {poll.question}
             </Text>
+            {isRole && (
+              <Box
+                className="px-2 py-1 rounded-full border justify-center"
+                style={{
+                  backgroundColor: 'rgba(245, 158, 11, 0.16)',
+                  borderColor: 'rgba(251, 191, 36, 0.45)',
+                }}
+              >
+                <Text
+                  className="text-[10px] font-bold uppercase tracking-wider leading-none"
+                  style={{ color: '#fde68a' }}
+                >
+                  Role
+                </Text>
+              </Box>
+            )}
+            {!isRole && poll.linkedField && (
+              <Box
+                className="px-2 py-1 rounded-full border justify-center"
+                style={{
+                  backgroundColor: 'rgba(37, 99, 235, 0.18)',
+                  borderColor: 'rgba(96, 165, 250, 0.45)',
+                }}
+              >
+                <Text
+                  className="text-[10px] font-bold uppercase tracking-wider leading-none"
+                  style={{ color: '#93c5fd' }}
+                >
+                  {poll.linkedField === 'time' ? 'Time' : 'Location'}
+                </Text>
+              </Box>
+            )}
           </HStack>
-          {poll.allowMultiple && !isExpired && (
+          {!isRole && poll.allowMultiple && !isExpired && (
             <Text className={`text-blue-400 font-semibold uppercase tracking-wider ${compact ? 'text-[10px]' : 'text-xs'}`}>
               Select Multiple
             </Text>
           )}
         </VStack>
-        
+
         <HStack className="items-center gap-3 shrink-0">
-          {isExpired && (
-            <Box className="bg-red-500/20 px-2 py-1 rounded border border-red-500 justify-center">
-              <Text className="text-red-400 text-xs font-bold uppercase tracking-wider leading-none">Ended</Text>
-            </Box>
-          )}
-          {!isExpired && expiresAtDate && (
-            <Box className="bg-blue-900/30 px-2 py-1 rounded border border-blue-800/50 justify-center">
-              <Text className="text-blue-400 text-xs font-bold uppercase tracking-wider leading-none">{timeLeft}</Text>
-            </Box>
-          )}
+          {renderStatusBadge()}
           {isOrganizer && onActionPress && (
             <TouchableOpacity
               onPress={() => onActionPress(poll)}
@@ -146,77 +283,79 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
         </HStack>
       </HStack>
 
-      <VStack className={compact ? 'gap-1.5 mt-1' : 'gap-2 mt-2'}>
-        {isExpired && totalVotes === 0 && (
-          <Text className="text-zinc-500 text-[10px] font-bold uppercase tracking-wider ml-1 mb-0.5">
-            No Votes Cast
-          </Text>
-        )}
-        {isExpired && totalVotes > 0 ? (
-          <View className={`relative overflow-hidden bg-zinc-900/80 border border-yellow-600/30 rounded-lg ${compact ? 'p-3' : 'p-4'}`}>
-            <Animated.View 
-              className="absolute top-0 bottom-0 left-0 right-0 bg-yellow-500/30" 
-              style={{ opacity: pulseAnim }} 
-            />
-            <HStack className="items-center justify-between gap-3 relative z-10">
-              <HStack className="items-center gap-2 flex-1">
-                <Text className={`text-yellow-500 font-bold uppercase tracking-wider ${compact ? 'text-[10px]' : 'text-xs'}`}>
-                  {winners.length > 1 ? 'Tie' : 'Winner'}:
-                </Text>
-                <Text className={`font-bold text-zinc-50 flex-1 ${compact ? 'text-sm' : ''}`} numberOfLines={1}>
-                  {winners.map((w: any) => w.text).join(' / ')}
-                </Text>
-              </HStack>
-              <Text className={`font-bold text-zinc-300 shrink-0 ${compact ? 'text-xs' : 'text-sm'}`}>
-                {Math.round((maxVotes / totalVotes) * 100)}% ({maxVotes} {maxVotes === 1 ? 'vote' : 'votes'})
-              </Text>
-            </HStack>
-          </View>
-        ) : (
-          poll.options.map((option: any, index: number) => {
-          const isSelected = poll.allowMultiple 
-            ? localSelections.includes(index) 
-            : option.voterIds.includes(currentUid);
-          const voteCount = option.voterIds.length;
-          const pct = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
-
-          return (
-            <TouchableOpacity
-              key={index}
-              activeOpacity={isExpired ? 1 : 0.7}
-              disabled={isExpired}
-              onPress={() => {
-                if (poll.allowMultiple) {
-                  setIsEditingMultiple(true);
-                  setLocalSelections(prev => prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]);
-                } else {
-                  onVote(poll.id, index, poll.options, poll.allowMultiple);
-                }
-              }}
-              className={`rounded-lg border overflow-hidden relative ${compact ? 'p-3' : 'p-4'} ${isSelected ? 'bg-blue-900/40 border-blue-500' : 'bg-zinc-900/50 border-zinc-700'}`}
-            >
-              {displayResults && (
-                <View className={`absolute top-0 bottom-0 left-0 ${isSelected ? 'bg-blue-600/30' : 'bg-zinc-700/50'}`} style={{ width: `${pct}%` }} />
-              )}
-              <HStack className="justify-between items-center z-10">
-                <Text className={`font-medium ${compact ? 'text-sm' : ''} ${isSelected ? 'text-blue-100' : 'text-zinc-300'}`}>
-                  {option.text}
-                </Text>
-                <Text className={`font-bold ${compact ? 'text-xs' : 'text-sm'} ${isSelected ? 'text-blue-400' : 'text-zinc-500'}`}>
-                  {displayResults ? `${pct}% (${voteCount})` : `${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}`}
+      {isRole ? renderRoleBody() : (
+        <VStack className={compact ? 'gap-1.5 mt-1' : 'gap-2 mt-2'}>
+          {isExpired && totalVotes === 0 && (
+            <Text className="text-zinc-500 text-[10px] font-bold uppercase tracking-wider ml-1 mb-0.5">
+              No Votes Cast
+            </Text>
+          )}
+          {isExpired && totalVotes > 0 ? (
+            <View className={`relative overflow-hidden bg-zinc-900/80 border border-yellow-600/30 rounded-lg ${compact ? 'p-3' : 'p-4'}`}>
+              <Animated.View
+                className="absolute top-0 bottom-0 left-0 right-0 bg-yellow-500/30"
+                style={{ opacity: pulseAnim }}
+              />
+              <HStack className="items-center justify-between gap-3 relative z-10">
+                <HStack className="items-center gap-2 flex-1">
+                  <Text className={`text-yellow-500 font-bold uppercase tracking-wider ${compact ? 'text-[10px]' : 'text-xs'}`}>
+                    {winners.length > 1 ? 'Tie' : 'Winner'}:
+                  </Text>
+                  <Text className={`font-bold text-zinc-50 flex-1 ${compact ? 'text-sm' : ''}`} numberOfLines={1}>
+                    {winners.map((w: any) => w.text).join(' / ')}
+                  </Text>
+                </HStack>
+                <Text className={`font-bold text-zinc-300 shrink-0 ${compact ? 'text-xs' : 'text-sm'}`}>
+                  {Math.round((maxVotes / totalVotes) * 100)}% ({maxVotes} {maxVotes === 1 ? 'vote' : 'votes'})
                 </Text>
               </HStack>
-            </TouchableOpacity>
-          );
-        })
-        )}
-      </VStack>
+            </View>
+          ) : (
+            poll.options.map((option: any, index: number) => {
+              const isSelected = poll.allowMultiple
+                ? localSelections.includes(index)
+                : option.voterIds.includes(currentUid);
+              const voteCount = option.voterIds.length;
+              const pct = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
 
-      {isEditingMultiple && !isExpired && (
+              return (
+                <TouchableOpacity
+                  key={index}
+                  activeOpacity={isExpired ? 1 : 0.7}
+                  disabled={isExpired}
+                  onPress={() => {
+                    if (poll.allowMultiple) {
+                      setIsEditingMultiple(true);
+                      setLocalSelections((prev) => prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]);
+                    } else {
+                      onVote(poll.id, index, poll.options, poll.allowMultiple);
+                    }
+                  }}
+                  className={`rounded-lg border overflow-hidden relative ${compact ? 'p-3' : 'p-4'} ${isSelected ? 'bg-blue-900/40 border-blue-500' : 'bg-zinc-900/50 border-zinc-700'}`}
+                >
+                  {displayResults && (
+                    <View className={`absolute top-0 bottom-0 left-0 ${isSelected ? 'bg-blue-600/30' : 'bg-zinc-700/50'}`} style={{ width: `${pct}%` }} />
+                  )}
+                  <HStack className="justify-between items-center z-10">
+                    <Text className={`font-medium ${compact ? 'text-sm' : ''} ${isSelected ? 'text-blue-100' : 'text-zinc-300'}`}>
+                      {option.text}
+                    </Text>
+                    <Text className={`font-bold ${compact ? 'text-xs' : 'text-sm'} ${isSelected ? 'text-blue-400' : 'text-zinc-500'}`}>
+                      {displayResults ? `${pct}% (${voteCount})` : `${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}`}
+                    </Text>
+                  </HStack>
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </VStack>
+      )}
+
+      {!isRole && isEditingMultiple && !isExpired && (
         <HStack className="justify-end gap-3 mt-2">
-          <Button 
-            size="sm" 
-            variant="link" 
+          <Button
+            size="sm"
+            variant="link"
             onPress={() => {
               setIsEditingMultiple(false);
               setLocalSelections(
@@ -228,10 +367,10 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
           >
             <ButtonText className="text-zinc-400">Cancel</ButtonText>
           </Button>
-          <Button 
-            size="sm" 
-            action="primary" 
-            className="bg-blue-600 border-0" 
+          <Button
+            size="sm"
+            action="primary"
+            className="bg-blue-600 border-0"
             onPress={() => {
               setIsEditingMultiple(false);
               onVote(poll.id, localSelections, poll.options, poll.allowMultiple);

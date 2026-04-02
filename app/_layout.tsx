@@ -8,6 +8,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../config/firebaseConfig';
 import { useNotifications } from '@/hooks/useNotifications';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
+import { trackScreenView } from '@/utils/analytics';
 import '../global.css';
 
 export default function RootLayout() {
@@ -18,6 +19,12 @@ export default function RootLayout() {
   const pathname = usePathname();
   const router = useRouter();
   const params = useGlobalSearchParams();
+
+  useEffect(() => {
+    const searchString = new URLSearchParams(params as any).toString();
+    const fullPath = searchString ? `${pathname}?${searchString}` : pathname;
+    trackScreenView(fullPath);
+  }, [pathname, params]);
 
   useEffect(() => {
     if (isAuthLoading) return;

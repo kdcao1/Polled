@@ -4,6 +4,7 @@ import { VStack } from '@/components/ui/vstack';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
+import { getEventItemType } from '@/utils/eventItems';
 
 export default function PollActionModal({ 
   poll,
@@ -27,7 +28,11 @@ export default function PollActionModal({
 
   if (!isOpen || !poll) return null;
 
-  const isExpired = poll.expiresAt && new Date() > (poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt));
+  const itemType = getEventItemType(poll);
+  const itemLabel = itemType === 'role' ? 'Role' : 'Poll';
+  const isExpired = itemType === 'role'
+    ? (poll.slotLimit != null && (poll.options?.[0]?.voterIds?.length ?? 0) >= poll.slotLimit)
+    : (poll.expiresAt && new Date() > (poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt)));
 
   return (
     <Modal visible={isOpen} transparent animationType="fade" onRequestClose={onClose}>
@@ -37,33 +42,36 @@ export default function PollActionModal({
           {!showConfirmDelete && !showConfirmEnd ? (
             <>
               <VStack className="gap-1 mb-2 items-center text-center">
-                <Heading size="xl" className="text-zinc-50">Poll Options</Heading>
+                <Heading size="xl" className="text-zinc-50">{itemLabel} Options</Heading>
                 <Text className="text-zinc-400 text-sm" numberOfLines={1}>"{poll.question}"</Text>
               </VStack>
               
               <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onEdit(poll); }}>
-                <ButtonText className="font-bold text-zinc-50">Edit Poll</ButtonText>
+                <ButtonText className="font-bold text-zinc-50">Edit {itemLabel}</ButtonText>
               </Button>
               
-              <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onRerun(poll); }}>
-                <ButtonText className="font-bold text-zinc-50">Rerun Poll</ButtonText>
-              </Button>
+              {itemType === 'poll' && (
+                <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onRerun(poll); }}>
+                  <ButtonText className="font-bold text-zinc-50">Rerun Poll</ButtonText>
+                </Button>
+              )}
               
-              {/* --- GROUPED ACTIVE POLL ACTIONS --- */}
               {!isExpired && (
                 <>
                   <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onNudge(poll); }}>
                     <ButtonText className="font-bold text-zinc-50">Nudge Invitees</ButtonText>
                   </Button>
 
-                  <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => setShowConfirmEnd(true)}>
-                    <ButtonText className="font-bold text-zinc-50">End Early</ButtonText>
-                  </Button>
+                  {itemType === 'poll' && (
+                    <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => setShowConfirmEnd(true)}>
+                      <ButtonText className="font-bold text-zinc-50">End Early</ButtonText>
+                    </Button>
+                  )}
                 </>
               )}
               
               <Button size="xl" variant="outline" className="border-red-500/30 bg-red-500/10 w-full" onPress={() => setShowConfirmDelete(true)}>
-                <ButtonText className="font-bold text-red-500">Delete Poll</ButtonText>
+                <ButtonText className="font-bold text-red-500">Delete {itemLabel}</ButtonText>
               </Button>
               
               <Button size="md" variant="link" className="mt-2" onPress={onClose}>
@@ -72,7 +80,7 @@ export default function PollActionModal({
             </>
           ) : showConfirmDelete ? (
             <>
-              <Heading size="xl" className="text-zinc-50 mb-2 text-center text-red-400">Delete Poll?</Heading>
+              <Heading size="xl" className="text-zinc-50 mb-2 text-center text-red-400">Delete {itemLabel}?</Heading>
               <Text className="text-center text-zinc-400 mb-4">This action cannot be undone.</Text>
               <Button size="xl" action="primary" className="bg-red-600 border-0 w-full" onPress={() => { onClose(); onDelete(poll); }}>
                 <ButtonText className="font-bold text-white">Yes, Delete</ButtonText>

@@ -11,6 +11,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db, auth } from '../../config/firebaseConfig';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
+import { trackEvent } from '@/utils/analytics';
 
 export default function EditEventScreen() {
   const router = useRouter();
@@ -94,6 +95,11 @@ export default function EditEventScreen() {
         title: title.trim(),
         time: time.trim(),
         location: location.trim(),
+      });
+      trackEvent('event_updated', {
+        event_id: id as string,
+        has_time: !!time.trim(),
+        has_location: !!location.trim(),
       });
 
       showToast('Success', 'Event updated successfully.', 'success');

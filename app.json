@@ -15,7 +15,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.kdcao.polled"
+      "bundleIdentifier": "com.kdcao.polled",
+      "associatedDomains": [
+        "applinks:polled.app"
+      ]
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +26,24 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.kdcao.polled"
+      "package": "com.kdcao.polled",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "polled.app",
+              "pathPrefix": "/join"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "web": {
       "bundler": "metro",

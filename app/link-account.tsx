@@ -12,6 +12,7 @@ import { useRouter } from 'expo-router';
 import { EmailAuthProvider, GoogleAuthProvider, linkWithCredential } from 'firebase/auth';
 import { auth } from '../config/firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
+import { trackEvent } from '@/utils/analytics';
 
 export default function LinkAccountScreen() {
   const router = useRouter();
@@ -67,6 +68,7 @@ export default function LinkAccountScreen() {
     try {
       const credential = GoogleAuthProvider.credential(idToken);
       await linkWithCredential(user, credential);
+      trackEvent('account_linked', { method: 'google' });
       
       showToast('Account Secured!', 'Your account is now linked to Google.', 'success');
       router.back();
@@ -93,6 +95,7 @@ export default function LinkAccountScreen() {
     try {
       const credential = EmailAuthProvider.credential(email.trim(), password);
       await linkWithCredential(user, credential);
+      trackEvent('account_linked', { method: 'email' });
       
       showToast('Account Secured!', 'Your email and password have been saved.', 'success');
       router.back();

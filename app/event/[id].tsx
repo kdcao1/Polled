@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -8,7 +8,7 @@ import { Button, ButtonText } from '@/components/ui/button';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { db, auth, logAppEvent } from '@/config/firebaseConfig';
+import { db, auth } from '@/config/firebaseConfig';
 import PollModal from '@/components/custom/PollModal';
 import PollCard from '@/components/custom/PollCard';
 import EventHeader from '@/components/custom/EventHeader';
@@ -16,10 +16,14 @@ import QRModal from '@/components/custom/QRModal';
 import EmptyState from '@/components/custom/EmptyState';
 import PollActionModal from '@/components/custom/PollActionModal';
 import ParticipantsModal from '@/components/custom/ParticipantsModal';
-import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc, getDocs, where} from 'firebase/firestore';
+import { buildJoinLink } from '@/utils/inviteLinks';
+import { trackEvent } from '@/utils/analytics';
+import { getEventItemType, getRespondedUserIds, getResponseCount, isEventItemExpired } from '@/utils/eventItems';
+import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc, getDocs, where, getDoc } from 'firebase/firestore';
 import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share } from 'react-native';
 import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
 
+type LinkedField = 'time' | 'location';
 
 
 export default function EventScreen() {
@@ -36,15 +40,17 @@ export default function EventScreen() {
 
   const [activeTab, setActiveTab] = useState<'details' | 'active' | 'answered'>('details');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalConfig, setModalConfig] = useState<{question?: string, choices?: string[], pollIdToEdit?: string}>({});
+  const [modalConfig, setModalConfig] = useState<{question?: string, choices?: string[], pollIdToEdit?: string, linkedField?: LinkedField}>({});
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
   const [actionPoll, setActionPoll] = useState<any>(null);
   const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
+  const quickPollSyncingRef = useRef<Record<LinkedField, string | null>>({ time: null, location: null });
+  const [hasAccess, setHasAccess] = useState(false);
 
-  const joinLink = `https://polled.app/join?code=${eventData?.joinCode || ''}`;
+  const joinLink = buildJoinLink(eventData?.joinCode);
   
-  const openModal = (question = '', choices = ['', '']) => {
-    setModalConfig({ question, choices, pollIdToEdit: undefined });
+  const openModal = (question = '', choices = ['', ''], linkedField?: LinkedField) => {
+    setModalConfig({ question, choices, pollIdToEdit: undefined, linkedField });
     setIsModalOpen(true);
   };
 
@@ -107,11 +113,15 @@ export default function EventScreen() {
 
   // --- 2. The handler function you pass to your Poll components ---
   const handleNudge = async (poll: any) => {
+    const itemType = getEventItemType(poll);
     await sendPushToEventMembers(
-      "Don't forget to vote! ⏰", 
-      `The poll "${poll.question}" is waiting for your response.`
+      itemType === 'role' ? 'Role still open!' : "Don't forget to vote! ⏰",
+      itemType === 'role'
+        ? `The role "${poll.question}" is still available to claim.`
+        : `The poll "${poll.question}" is waiting for your response.`
     );
-    
+    trackEvent(itemType === 'role' ? 'role_nudged' : 'poll_nudged', { event_id: id as string, poll_id: poll.id });
+
     toast.show({
       placement: "top",
       render: ({ id: toastId }) => (
@@ -133,6 +143,10 @@ export default function EventScreen() {
 
       // Show a success toast if they actually completed the share action
       if (result.action === Share.sharedAction) {
+        trackEvent('event_shared', {
+          event_id: id as string,
+          method: 'native_share',
+        });
         toast.show({
           placement: "top",
           render: ({ id: toastId }) => (
@@ -168,6 +182,7 @@ export default function EventScreen() {
     if (!codeToCopy) return;
 
     await Clipboard.setStringAsync(codeToCopy as string);
+    trackEvent('event_code_copied', { event_id: id as string });
     
     toast.show({
       placement: "top",
@@ -184,33 +199,129 @@ export default function EventScreen() {
 
   useEffect(() => {
     if (!id || !auth.currentUser) return;
-    const eventRef = doc(db, 'events', id as string);
-    const unsubscribe = onSnapshot(eventRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setEventData(data);
-        setIsOrganizer(data.organizerId === auth.currentUser?.uid);
+
+    let unsubscribeEvent: (() => void) | undefined;
+    let unsubscribePolls: (() => void) | undefined;
+
+    const initializeEventAccess = async () => {
+      try {
+        const eventRef = doc(db, 'events', id as string);
+        const eventDoc = await getDoc(eventRef);
+
+        if (!eventDoc.exists()) {
+          setLoading(false);
+          router.replace('/dashboard');
+          return;
+        }
+
+        const event = eventDoc.data();
+        const currentUid = auth.currentUser?.uid;
+        const userDoc = currentUid ? await getDoc(doc(db, 'users', currentUid)) : null;
+        const joinedEvents = userDoc?.exists() ? (userDoc.data().joinedEvents || []) : [];
+        const userHasAccess = event.organizerId === currentUid || joinedEvents.includes(id as string);
+
+        if (!userHasAccess) {
+          trackEvent('event_access_redirected_to_join', {
+            event_id: id as string,
+            join_code_present: !!event.joinCode,
+          });
+          setLoading(false);
+          router.replace(event.joinCode ? `/join?code=${event.joinCode}` : '/join');
+          return;
+        }
+
+        setHasAccess(true);
+
+        unsubscribeEvent = onSnapshot(eventRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setEventData(data);
+            setIsOrganizer(data.organizerId === auth.currentUser?.uid);
+          }
+          setLoading(false);
+        });
+
+        const pollsRef = collection(db, 'events', id as string, 'polls');
+        const q = query(pollsRef, orderBy('createdAt', 'desc'));
+        unsubscribePolls = onSnapshot(q, (snapshot) => {
+          setPolls(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+        });
+      } catch (error) {
+        console.error('Error checking event access:', error);
+        setLoading(false);
+        router.replace('/dashboard');
       }
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, [id]);
+    };
+
+    initializeEventAccess();
+
+    return () => {
+      if (unsubscribeEvent) unsubscribeEvent();
+      if (unsubscribePolls) unsubscribePolls();
+    };
+  }, [id, router]);
+
+  const getLinkedQuickPoll = (field: LinkedField) =>
+    polls.find((poll) => getEventItemType(poll) === 'poll' && poll.linkedField === field);
+
+  const getWinningOption = (poll: any) => {
+    if (!poll?.options?.length) return null;
+    const maxVotes = Math.max(...poll.options.map((option: any) => option.voterIds.length));
+    if (maxVotes <= 0) return null;
+    const winners = poll.options.filter((option: any) => option.voterIds.length === maxVotes);
+    return winners.length === 1 ? winners[0] : null;
+  };
 
   useEffect(() => {
-    if (!id) return;
-    const pollsRef = collection(db, 'events', id as string, 'polls');
-    const q = query(pollsRef, orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setPolls(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    return () => unsubscribe();
-  }, [id]);
+    if (!id || !eventData || !hasAccess) return;
+
+    const syncQuickPollDetails = async () => {
+      const eventRef = doc(db, 'events', id as string);
+
+      for (const field of ['time', 'location'] as LinkedField[]) {
+        const linkedQuickPoll = getLinkedQuickPoll(field);
+        if (!linkedQuickPoll || !isPollExpired(linkedQuickPoll)) continue;
+
+        const winningOption = getWinningOption(linkedQuickPoll);
+        if (!winningOption?.text?.trim()) continue;
+
+        const winningValue = winningOption.text.trim();
+        const currentValue = eventData?.[field]?.trim() || '';
+
+        if (currentValue === winningValue) {
+          quickPollSyncingRef.current[field] = linkedQuickPoll.id;
+          continue;
+        }
+
+        if (quickPollSyncingRef.current[field] === linkedQuickPoll.id) continue;
+        quickPollSyncingRef.current[field] = linkedQuickPoll.id;
+
+        try {
+          await updateDoc(eventRef, {
+            [field]: winningValue,
+          });
+          trackEvent('quick_poll_result_applied', {
+            event_id: id as string,
+            field,
+            poll_id: linkedQuickPoll.id,
+          });
+        } catch (error) {
+          quickPollSyncingRef.current[field] = null;
+          console.error(`Error syncing ${field} quick poll result:`, error);
+        }
+      }
+    };
+
+    syncQuickPollDetails();
+  }, [id, eventData, polls, hasAccess]);
 
   const handleVote = async (pollId: string, selectedIndices: number | number[], currentOptions: any[], allowMultipleVotes: boolean) => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
 
     const pollRef = doc(db, 'events', id as string, 'polls', pollId);
+    let updatedItemType: 'poll' | 'role' = 'poll';
+    let roleAction: 'claimed' | 'unclaimed' | null = null;
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -218,8 +329,18 @@ export default function EventScreen() {
         if (!pollDoc.exists()) throw new Error("Poll not found");
 
         const pollData = pollDoc.data();
+        updatedItemType = getEventItemType(pollData);
 
-        if (pollData.expiresAt && new Date() > (pollData.expiresAt?.toDate ? pollData.expiresAt.toDate() : new Date(pollData.expiresAt))) {
+        if (updatedItemType === 'role') {
+          const roleOption = pollData.options?.[0];
+          const roleIsFull = pollData.slotLimit != null && getResponseCount(pollData) >= pollData.slotLimit;
+          const alreadySelected = roleOption?.voterIds?.includes(uid);
+          roleAction = alreadySelected ? 'unclaimed' : 'claimed';
+
+          if (roleIsFull && !alreadySelected) {
+            throw new Error('FULL');
+          }
+        } else if (isEventItemExpired(pollData)) {
           throw new Error("EXPIRED");
         }
 
@@ -248,15 +369,29 @@ export default function EventScreen() {
 
         transaction.update(pollRef, { options: newOptions });
       });
-
-      await logAppEvent('vote_cast', {
+      trackEvent(updatedItemType === 'role'
+        ? (roleAction === 'unclaimed' ? 'role_unclaimed' : 'role_claimed')
+        : 'poll_voted', {
+        event_id: id as string,
         poll_id: pollId,
-        is_multiple_choice: allowMultipleVotes,
-        debug_mode: true
+        allow_multiple: allowMultipleVotes,
+        selection_count: Array.isArray(selectedIndices) ? selectedIndices.length : 1,
       });
       
     } catch (error: any) {
-      if (error.message === "EXPIRED") {
+      if (error.message === 'FULL') {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-amber-400 font-bold text-sm">Role Filled</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">All available spots for that role have already been claimed.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      } else if (error.message === "EXPIRED") {
         toast.show({
           placement: "top",
           render: ({ id: toastId }) => (
@@ -274,10 +409,14 @@ export default function EventScreen() {
     }
   };
 
-  const handleDeletePoll = async (pollId: string) => {
+  const handleDeletePoll = async (poll: any) => {
     if (!id) return;
     try {
-      await deleteDoc(doc(db, 'events', id as string, 'polls', pollId));
+      await deleteDoc(doc(db, 'events', id as string, 'polls', poll.id));
+      trackEvent(getEventItemType(poll) === 'role' ? 'role_deleted' : 'poll_deleted', {
+        event_id: id as string,
+        poll_id: poll.id,
+      });
     } catch (error) {
       console.error('Error deleting poll:', error);
     }
@@ -289,25 +428,31 @@ export default function EventScreen() {
       await updateDoc(doc(db, 'events', id as string, 'polls', poll.id), {
         expiresAt: new Date()
       });
+      trackEvent('poll_ended_early', { event_id: id as string, poll_id: poll.id });
     } catch (error) {
       console.error('Error ending poll early:', error);
     }
   };
 
   const handleEditPoll = (poll: any) => {
+    trackEvent(getEventItemType(poll) === 'role' ? 'role_edit_started' : 'poll_edit_started', { event_id: id as string, poll_id: poll.id });
     setModalConfig({ 
       question: poll.question, 
       choices: poll.options.map((o: any) => o.text),
-      pollIdToEdit: poll.id
+      pollIdToEdit: poll.id,
+      linkedField: poll.linkedField,
     });
     setIsModalOpen(true);
   };
 
   const handleRerunPoll = (poll: any) => {
+    if (getEventItemType(poll) === 'role') return;
+    trackEvent('poll_rerun_started', { event_id: id as string, poll_id: poll.id });
     setModalConfig({ 
       question: poll.question, 
       choices: poll.options.map((o: any) => o.text),
-      pollIdToEdit: undefined
+      pollIdToEdit: undefined,
+      linkedField: poll.linkedField,
     });
     setIsModalOpen(true);
   };
@@ -315,23 +460,86 @@ export default function EventScreen() {
   const currentUid = auth.currentUser?.uid;
   
   const isPollExpired = (poll: any) => {
-    if (!poll.expiresAt) return false;
-    const expiresAtDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt);
-    return new Date() > expiresAtDate;
+    return isEventItemExpired(poll);
   };
 
   const activePolls = polls.filter((poll) => {
-    const hasVoted = poll.options.some((opt: any) => opt.voterIds.includes(currentUid));
+    const respondedUserIds = getRespondedUserIds(poll);
+    const hasVoted = currentUid ? respondedUserIds.includes(currentUid) : false;
     return !hasVoted && !isPollExpired(poll);
   });
   const answeredPolls = polls.filter((poll) => {
-    const hasVoted = poll.options.some((opt: any) => opt.voterIds.includes(currentUid));
+    const respondedUserIds = getRespondedUserIds(poll);
+    const hasVoted = currentUid ? respondedUserIds.includes(currentUid) : false;
     return hasVoted || isPollExpired(poll);
   });
 
-  const uniqueVoters = new Set();
-  polls.forEach((poll) => poll.options.forEach((opt: any) => opt.voterIds.forEach((uid: string) => uniqueVoters.add(uid))));
-  const headcount = uniqueVoters.size;
+  const uniqueParticipants = new Set<string>();
+  const roleAssignments = polls.reduce<Record<string, string[]>>((acc, poll) => {
+    getRespondedUserIds(poll).forEach((uid) => uniqueParticipants.add(uid));
+
+    if (getEventItemType(poll) === 'role') {
+      getRespondedUserIds(poll).forEach((uid) => {
+        acc[uid] = [...(acc[uid] || []), poll.question];
+      });
+    }
+
+    return acc;
+  }, {});
+  const headcount = uniqueParticipants.size;
+  const timeQuickPoll = getLinkedQuickPoll('time');
+  const locationQuickPoll = getLinkedQuickPoll('location');
+
+  const renderDetailValue = (field: LinkedField) => {
+    const currentValue = eventData?.[field];
+    if (currentValue) {
+      return <Text className="text-zinc-50 text-lg font-semibold">{currentValue}</Text>;
+    }
+
+    if (!isOrganizer) {
+      return <Text className="text-zinc-50 text-lg font-semibold">TBD</Text>;
+    }
+
+    const linkedQuickPoll = field === 'time' ? timeQuickPoll : locationQuickPoll;
+    const defaultQuestion = field === 'time' ? 'What time?' : 'Where we going?';
+    const defaultButtonLabel = field === 'time' ? 'Poll Time' : 'Poll Location';
+
+    if (linkedQuickPoll && !isPollExpired(linkedQuickPoll)) {
+      return (
+        <Text className="text-blue-400 text-base font-semibold">
+          Currently polling
+        </Text>
+      );
+    }
+
+    if (linkedQuickPoll && isPollExpired(linkedQuickPoll) && !getWinningOption(linkedQuickPoll)) {
+      return (
+        <Button
+          size="sm"
+          variant="outline"
+          className="self-start border-zinc-600 bg-zinc-800 mt-2"
+          onPress={() => openModal(defaultQuestion, ['', ''], field)}
+        >
+          <ButtonText className="text-zinc-50 font-semibold">Rerun Poll</ButtonText>
+        </Button>
+      );
+    }
+
+    if (linkedQuickPoll && isPollExpired(linkedQuickPoll) && getWinningOption(linkedQuickPoll)) {
+      return <Text className="text-blue-400 text-base font-semibold">Updating from quick poll...</Text>;
+    }
+
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        className="self-start border-zinc-600 bg-zinc-800 mt-2"
+        onPress={() => openModal(defaultQuestion, ['', ''], field)}
+      >
+        <ButtonText className="text-zinc-50 font-semibold">{defaultButtonLabel}</ButtonText>
+      </Button>
+    );
+  };
 
   if (loading) {
     return (
@@ -353,10 +561,24 @@ export default function EventScreen() {
             isMobile={isMobile} 
             isOrganizer={isOrganizer} 
             joinLink={joinLink}
+            timeQuickPoll={timeQuickPoll}
+            locationQuickPoll={locationQuickPoll}
+            isQuickPollExpired={isPollExpired}
+            getQuickPollWinner={getWinningOption}
             onBack={() => router.canGoBack() ? router.back() : router.replace('/dashboard')}
-            onShowQR={() => setIsQRModalOpen(true)}
-            onOpenModal={openModal}
-            onShowParticipants={() => setIsParticipantsModalOpen(true)}
+            onShowQR={() => {
+              trackEvent('qr_modal_opened', { event_id: id as string });
+              setIsQRModalOpen(true);
+            }}
+            onOpenModal={(question, linkedField) => openModal(question, ['', ''], linkedField)}
+            onShowParticipants={() => {
+              trackEvent('participants_modal_opened', { event_id: id as string });
+              setIsParticipantsModalOpen(true);
+            }}
+            onEditEvent={() => {
+              trackEvent('event_edit_started', { event_id: id as string });
+              router.push(`/edit/${id as string}`);
+            }}
           />
         )}
 
@@ -382,7 +604,10 @@ export default function EventScreen() {
 
               {/* Share Options */}
               <HStack className="gap-3">
-                <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={() => setIsQRModalOpen(true)}>
+                <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={() => {
+                  trackEvent('qr_modal_opened', { event_id: id as string });
+                  setIsQRModalOpen(true);
+                }}>
                   <QrCode size={16} color="#f4f4f5" />
                   <ButtonText className="text-zinc-50 font-bold">QR Code</ButtonText>
                 </Button>
@@ -405,9 +630,12 @@ export default function EventScreen() {
             </HStack>
 
             {/* --- CREATE BUTTON (Only on Active tab) --- */}
-            {isOrganizer && activeTab === 'active' && (
-              <Button size="md" action="primary" className="bg-blue-600 border-0 mb-4" onPress={() => setIsModalOpen(true)}>
-                <ButtonText className="font-bold text-white">+ Create Poll</ButtonText>
+                {isOrganizer && activeTab === 'active' && (
+              <Button size="md" action="primary" className="bg-blue-600 border-0 mb-4" onPress={() => {
+                trackEvent('item_create_started', { event_id: id as string });
+                setIsModalOpen(true);
+              }}>
+                <ButtonText className="font-bold text-white">+ Create</ButtonText>
               </Button>
             )}
 
@@ -427,20 +655,23 @@ export default function EventScreen() {
                       <View className="h-px bg-zinc-700/50 w-full" />
                       <VStack>
                         <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Time</Text>
-                        <Text className="text-zinc-50 text-lg font-semibold">{eventData?.time || 'TBD'}</Text>
+                        {renderDetailValue('time')}
                       </VStack>
                       <View className="h-px bg-zinc-700/50 w-full" />
                       <VStack>
                         <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Location</Text>
-                        <Text className="text-zinc-50 text-lg font-semibold">{eventData?.location || 'TBD'}</Text>
+                        {renderDetailValue('location')}
                       </VStack>
                       <View className="h-px bg-zinc-700/50 w-full" />
                       <HStack className="justify-between items-center">
                         <VStack>
-                          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Active Voters</Text>
+                          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Participants</Text>
                           <Text className="text-zinc-50 text-lg font-semibold mt-0.5">{headcount} {headcount === 1 ? 'person' : 'people'}</Text>
                         </VStack>
-                        <TouchableOpacity activeOpacity={0.7} onPress={() => setIsParticipantsModalOpen(true)} className="p-2 bg-zinc-700/50 rounded-full border border-zinc-600/50">
+                        <TouchableOpacity activeOpacity={0.7} onPress={() => {
+                          trackEvent('participants_modal_opened', { event_id: id as string });
+                          setIsParticipantsModalOpen(true);
+                        }} className="p-2 bg-zinc-700/50 rounded-full border border-zinc-600/50">
                           <Eye size={20} color="#a1a1aa" />
                         </TouchableOpacity>
                       </HStack>
@@ -485,8 +716,11 @@ export default function EventScreen() {
               <HStack className="justify-between items-end mb-4 mt-1">
                 <Heading size="xl" className="text-zinc-50">Active</Heading>
                 {isOrganizer && (
-                  <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => setIsModalOpen(true)}>
-                    <ButtonText className="font-bold text-white">+ New Poll</ButtonText>
+                  <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => {
+                    trackEvent('item_create_started', { event_id: id as string });
+                    setIsModalOpen(true);
+                  }}>
+                    <ButtonText className="font-bold text-white">+ New</ButtonText>
                   </Button>
                 )}
               </HStack>
@@ -518,18 +752,25 @@ export default function EventScreen() {
       </View>
 
       <QRModal visible={isQRModalOpen} onClose={() => setIsQRModalOpen(false)} eventData={eventData} joinLink={joinLink} />
-      <PollModal visible={isModalOpen} eventId={id as string} onClose={() => setIsModalOpen(false)} initialQuestion={modalConfig.question} initialChoices={modalConfig.choices} pollIdToEdit={modalConfig.pollIdToEdit} />
+      <PollModal visible={isModalOpen} eventId={id as string} onClose={() => setIsModalOpen(false)} initialQuestion={modalConfig.question} initialChoices={modalConfig.choices} pollIdToEdit={modalConfig.pollIdToEdit} linkedField={modalConfig.linkedField} />
       <PollActionModal 
         isOpen={!!actionPoll} 
         poll={actionPoll} 
         onClose={() => setActionPoll(null)} 
-        onDelete={(poll: any) => handleDeletePoll(poll.id)}
+        onDelete={handleDeletePoll}
         onEndEarly={handleEndPollEarly}
         onEdit={handleEditPoll}
         onRerun={handleRerunPoll}
         onNudge={handleNudge}
       />
-      <ParticipantsModal visible={isParticipantsModalOpen} onClose={() => setIsParticipantsModalOpen(false)} voterIds={Array.from(uniqueVoters) as string[]} />
+      <ParticipantsModal
+        visible={isParticipantsModalOpen}
+        onClose={() => setIsParticipantsModalOpen(false)}
+        participantIds={Array.from(uniqueParticipants)}
+        roleAssignments={roleAssignments}
+        organizerId={eventData?.organizerId}
+        eventId={id as string}
+      />
     </Box>
   );
 }

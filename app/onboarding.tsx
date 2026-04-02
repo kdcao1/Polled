@@ -9,6 +9,7 @@ import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { doc, setDoc } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
+import { trackEvent } from '@/utils/analytics';
 
 export default function OnboardingScreen() {
   const [name, setName] = useState('');
@@ -26,6 +27,10 @@ export default function OnboardingScreen() {
         displayName: name.trim(),
         joinedEvents: [] 
       }, { merge: true });
+
+      trackEvent('onboarding_completed', {
+        has_next_destination: typeof next === 'string',
+      });
 
       if (typeof next === 'string') {
         router.replace(next as any);

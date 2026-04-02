@@ -13,6 +13,7 @@ import { updateProfile, signOut } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../config/firebaseConfig';
 import { Pencil } from 'lucide-react-native';
+import { trackEvent } from '@/utils/analytics';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -53,6 +54,7 @@ export default function SettingsScreen() {
       
       setSavedName(displayName.trim());
       setIsEditModalOpen(false);
+      trackEvent('profile_updated', { field: 'display_name' });
       
       // --- NEW SUCCESS TOAST ---
       toast.show({
@@ -93,6 +95,7 @@ export default function SettingsScreen() {
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
+      trackEvent('logout');
       await signOut(auth);
       router.replace('/');
     } catch (error) {

@@ -16,14 +16,72 @@ interface EventHeaderProps {
   isMobile: boolean;
   isOrganizer: boolean;
   joinLink: string;
+  timeQuickPoll?: any;
+  locationQuickPoll?: any;
+  isQuickPollExpired: (poll: any) => boolean;
+  getQuickPollWinner: (poll: any) => any;
   onBack: () => void;
   onShowQR: () => void;
-  onOpenModal: (question: string) => void;
+  onOpenModal: (question: string, linkedField?: 'time' | 'location') => void;
   onShowParticipants: () => void;
+  onEditEvent: () => void;
 }
 
-export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, onBack, onShowQR, onOpenModal, onShowParticipants }: EventHeaderProps) {
+export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, timeQuickPoll, locationQuickPoll, isQuickPollExpired, getQuickPollWinner, onBack, onShowQR, onOpenModal, onShowParticipants, onEditEvent }: EventHeaderProps) {
   const toast = useToast();
+
+  const renderQuickPollValue = (field: 'time' | 'location', quickPoll?: any) => {
+    const currentValue = eventData?.[field];
+    if (currentValue) {
+      return field === 'location' ? (
+        <Text className="text-zinc-50 font-semibold text-right max-w-[140px]" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
+          {currentValue}
+        </Text>
+      ) : (
+        <Text className="text-zinc-50 font-semibold">{currentValue}</Text>
+      );
+    }
+
+    if (!isOrganizer) {
+      return <Text className="text-zinc-50 font-semibold">TBD</Text>;
+    }
+
+    if (quickPoll && !isQuickPollExpired(quickPoll)) {
+      return (
+        <Text className="text-blue-400 font-semibold text-right max-w-[160px]" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
+          Currently polling
+        </Text>
+      );
+    }
+
+    if (quickPoll && isQuickPollExpired(quickPoll)) {
+      if (getQuickPollWinner(quickPoll)) {
+        return <Text className="text-blue-400 font-semibold">Updating...</Text>;
+      }
+
+      return (
+        <Button
+          size="xs"
+          variant="outline"
+          className="border-zinc-600 bg-zinc-800 h-7 px-2"
+          onPress={() => onOpenModal(field === 'time' ? 'What time?' : 'Where we going?', field)}
+        >
+          <ButtonText className="text-zinc-300 text-xs">Rerun Poll</ButtonText>
+        </Button>
+      );
+    }
+
+    return (
+      <Button
+        size="xs"
+        variant="outline"
+        className="border-zinc-600 bg-zinc-800 h-7 px-2"
+        onPress={() => onOpenModal(field === 'time' ? 'What time?' : 'Where we going?', field)}
+      >
+        <ButtonText className="text-zinc-300 text-xs">{field === 'time' ? 'Poll Time' : 'Poll Location'}</ButtonText>
+      </Button>
+    );
+  };
 
   const handleCopyLink = async () => {
     await Clipboard.setStringAsync(joinLink);
@@ -90,7 +148,14 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
         </VStack>
 
         <VStack className={`bg-zinc-800 rounded-2xl p-5 border border-zinc-700 ${isMobile ? 'w-full mt-2' : 'min-w-[240px]'}`}>
-          <Heading size="sm" className="text-zinc-400 uppercase tracking-wider mb-3">Event Details</Heading>
+          <HStack className="justify-between items-center mb-3">
+            <Heading size="sm" className="text-zinc-400 uppercase tracking-wider">Event Details</Heading>
+            {isOrganizer && (
+              <Button size="xs" variant="outline" className="border-zinc-600 bg-zinc-800 h-7 px-2" onPress={onEditEvent}>
+                <ButtonText className="text-zinc-300 text-xs">Edit</ButtonText>
+              </Button>
+            )}
+          </HStack>
           
           <VStack className="gap-3">
             <HStack className="justify-between gap-6 items-center">
@@ -100,26 +165,12 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
 
             <HStack className="justify-between gap-6 items-center">
               <Text className="text-zinc-400 font-medium">Time</Text>
-              {!eventData?.time && isOrganizer ? (
-                <Button size="xs" variant="outline" className="border-zinc-600 bg-zinc-800 h-7 px-2" onPress={() => onOpenModal('What time?')}>
-                  <ButtonText className="text-zinc-300 text-xs">Poll Time</ButtonText>
-                </Button>
-              ) : (
-                <Text className="text-zinc-50 font-semibold">{eventData?.time || 'TBD'}</Text>
-              )}
+              {renderQuickPollValue('time', timeQuickPoll)}
             </HStack>
             
             <HStack className="justify-between gap-6 items-center">
               <Text className="text-zinc-400 font-medium">Location</Text>
-              {!eventData?.location && isOrganizer ? (
-                <Button size="xs" variant="outline" className="border-zinc-600 bg-zinc-800 h-7 px-2" onPress={() => onOpenModal('Where we going?')}>
-                  <ButtonText className="text-zinc-300 text-xs">Poll Location</ButtonText>
-                </Button>
-              ) : (
-                <Text className="text-zinc-50 font-semibold text-right max-w-[140px]" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
-                  {eventData?.location || 'TBD'}
-                </Text>
-              )}
+              {renderQuickPollValue('location', locationQuickPoll)}
             </HStack>
 
             <HStack className="justify-between gap-6 items-center">

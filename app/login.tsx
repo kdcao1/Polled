@@ -13,6 +13,7 @@ import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithCredential } 
 import { auth } from '../config/firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
+import { trackEvent } from '@/utils/analytics';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -65,11 +66,13 @@ export default function LoginScreen() {
     try {
       const credential = GoogleAuthProvider.credential(idToken);
       await signInWithCredential(auth, credential);
+      trackEvent('login_success', { method: 'google' });
       
       router.replace('/dashboard');
 
     } catch (error: any) {
       console.error('Error logging in with Google:', error);
+      trackEvent('login_failed', { method: 'google', error_code: error?.code || 'unknown' });
       showToast('Login Failed', 'Could not log in with Google. Please try again.', 'error');
       setIsLoggingIn(false);
     }
@@ -81,13 +84,16 @@ export default function LoginScreen() {
   const handleEmailLogin = async () => {
     if (!email.trim() || !password.trim()) return;
     setIsLoggingIn(true);
+    trackEvent('login_attempt', { method: 'email' });
 
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
+      trackEvent('login_success', { method: 'email' });
       router.replace('/dashboard');
       
     } catch (error: any) {
       console.error('Error logging in with email:', error);
+      trackEvent('login_failed', { method: 'email', error_code: error?.code || 'unknown' });
       
       // Firebase unified wrong-password and user-not-found into invalid-credential for security
       if (error.code === 'auth/invalid-credential') {
@@ -129,7 +135,10 @@ export default function LoginScreen() {
             <Button 
               size="xl" 
               className="bg-white border-0" 
-              onPress={() => promptAsync()}
+              onPress={() => {
+                trackEvent('login_attempt', { method: 'google' });
+                promptAsync();
+              }}
               isDisabled={!request || isLoggingIn}
             >
               {isLoggingIn ? (

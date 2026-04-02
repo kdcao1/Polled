@@ -13,6 +13,7 @@ import { useDashboard, EventData } from '../hooks/useDashboard';
 import { Settings, MoreVertical } from 'lucide-react-native';
 import EventActionModal from '@/components/custom/EventActionModal';
 import EventSummaryBadge from '@/components/custom/EventSummaryBadge'; // Ensure this path matches where you saved it!
+import { trackEvent } from '@/utils/analytics';
 
 export default function DashboardScreen() {
   const { events, loading, removeEvent } = useDashboard();
@@ -39,6 +40,10 @@ export default function DashboardScreen() {
       }
       
       removeEvent(actionEvent.id);
+      trackEvent('event_removed_from_dashboard', {
+        event_id: actionEvent.id,
+        organizer_removed_event: actionEvent.organizerId === currentUid,
+      });
       setActionEvent(null);
     } catch (error) {
       console.error('Error removing event:', error);
@@ -59,7 +64,10 @@ export default function DashboardScreen() {
           <HStack className="gap-3 items-center">
             <TouchableOpacity 
               activeOpacity={0.7}
-              onPress={() => router.push('/settings')}
+              onPress={() => {
+                trackEvent('settings_opened');
+                router.push('/settings');
+              }}
               className="w-10 h-10 rounded-full bg-zinc-800 border border-zinc-700 items-center justify-center"
             >
               <Settings size={20} color="#a1a1aa" />
@@ -69,7 +77,10 @@ export default function DashboardScreen() {
               size="sm"
               variant="outline"
               className="border-zinc-600"
-              onPress={() => router.push('/join')}
+              onPress={() => {
+                trackEvent('dashboard_cta_clicked', { destination: 'join' });
+                router.push('/join');
+              }}
             >
               <ButtonText className="text-zinc-50 font-bold">Join</ButtonText>
             </Button>
@@ -78,7 +89,10 @@ export default function DashboardScreen() {
               size="sm"
               action="primary"
               className="bg-blue-600 border-0"
-              onPress={() => router.push('/create')}
+              onPress={() => {
+                trackEvent('dashboard_cta_clicked', { destination: 'create' });
+                router.push('/create');
+              }}
             >
               <ButtonText className="font-bold text-white">New</ButtonText>
             </Button>
@@ -96,7 +110,10 @@ export default function DashboardScreen() {
               size="xl"
               action="primary"
               className="bg-blue-600 border-0 w-full"
-              onPress={() => router.push('/create')}
+              onPress={() => {
+                trackEvent('dashboard_cta_clicked', { destination: 'create_empty_state' });
+                router.push('/create');
+              }}
             >
               <ButtonText className="font-bold text-white">Create New Event</ButtonText>
             </Button>
@@ -107,7 +124,10 @@ export default function DashboardScreen() {
               {events.map((event) => (
                 <TouchableOpacity
                   key={event.id}
-                  onPress={() => router.navigate(`/event/${event.id}`)}
+                  onPress={() => {
+                    trackEvent('event_opened', { event_id: event.id });
+                    router.navigate(`/event/${event.id}`);
+                  }}
                   className="bg-zinc-800 p-5 rounded-2xl border border-zinc-700 active:bg-zinc-700"
                 >
                   <VStack className="gap-4">
@@ -129,6 +149,7 @@ export default function DashboardScreen() {
                       <TouchableOpacity
                         onPress={(e) => {
                           e.stopPropagation(); 
+                          trackEvent('event_action_menu_opened', { event_id: event.id });
                           setActionEvent(event); // This correctly triggers the modal!
                         }}
                         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}

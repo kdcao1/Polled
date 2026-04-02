@@ -9,6 +9,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { collection, query, where, getDocs, doc, setDoc, arrayUnion } from 'firebase/firestore';
 import { KeyboardAvoidingView, Platform } from 'react-native';
 import { db, auth } from '../config/firebaseConfig';
+import { trackEvent } from '@/utils/analytics';
 
 export default function JoinScreen() {
   const router = useRouter();
@@ -24,6 +25,7 @@ export default function JoinScreen() {
 
     setIsJoining(true);
     setErrorMsg('');
+    trackEvent('event_join_attempt', { code_length: code.length });
 
     try {
       // 1. Search the database for an event containing this join code
@@ -31,6 +33,7 @@ export default function JoinScreen() {
       const querySnapshot = await getDocs(q);
 
       if (querySnapshot.empty) {
+        trackEvent('event_join_failed', { reason: 'code_not_found' });
         setErrorMsg("We couldn't find an event with that code.");
         setIsJoining(false);
         return;
@@ -46,11 +49,14 @@ export default function JoinScreen() {
         joinedEvents: arrayUnion(secureEventId)
       }, { merge: true });
 
+      trackEvent('event_joined', { event_id: secureEventId });
+
       // 4. Route them to the event
       router.replace(`/event/${secureEventId}`);
 
     } catch (error) {
       console.error("Error joining event:", error);
+      trackEvent('event_join_failed', { reason: 'unknown_error' });
       setErrorMsg("Something went wrong. Try again.");
       setIsJoining(false);
     }
