@@ -28,7 +28,6 @@ https://polled.app
 
 ## TODO
 
-* fix mobile time modal
 * change time selection to either people can enter blocks of available time or allow users to add a choice onto the time poll
 * test notifications
 * create admin panel
@@ -39,3 +38,7 @@ https://polled.app
 * replace:
     * `YOUR_APPLE_TEAM_ID` with your Apple Developer Team ID
     * `YOUR_RELEASE_SHA256_FINGERPRINT` with the SHA-256 fingerprint from the Android signing certificate used for production
+* end event
+* bugged modal when edit, keeps histroy for too much
+* back button doesnt work when notificaiton toast is there
+* option to let invitees add choices
