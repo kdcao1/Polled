@@ -10,7 +10,7 @@ import { Button, ButtonText, ButtonSpinner } from '@/components/ui/button';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import { useRouter } from 'expo-router';
 import { updateProfile, signOut } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../config/firebaseConfig';
 import { Pencil } from 'lucide-react-native';
 import { trackEvent } from '@/utils/analytics';
@@ -51,6 +51,7 @@ export default function SettingsScreen() {
       await updateProfile(user, { displayName: displayName.trim() });
       const userRef = doc(db, 'users', user.uid);
       await updateDoc(userRef, { displayName: displayName.trim() });
+      await setDoc(doc(db, 'profiles', user.uid), { displayName: displayName.trim() }, { merge: true });
       
       setSavedName(displayName.trim());
       setIsEditModalOpen(false);
@@ -60,7 +61,7 @@ export default function SettingsScreen() {
       toast.show({
         placement: "top",
         render: ({ id }) => (
-          <Toast nativeID={id} className="bg-green-600/20 border border-green-500/50 mt-12 px-4 py-3 rounded-xl">
+          <Toast nativeID={id} className="bg-green-600/20 border border-green-500/50 mt-24 px-4 py-3 rounded-xl">
             <VStack>
               <ToastTitle className="text-green-400 font-bold text-sm">Success</ToastTitle>
               <ToastDescription className="text-zinc-300 text-xs mt-0.5">Your profile has been updated.</ToastDescription>
@@ -76,7 +77,7 @@ export default function SettingsScreen() {
       toast.show({
         placement: "top",
         render: ({ id }) => (
-          <Toast nativeID={id} className="bg-red-600/20 border border-red-500/50 mt-12 px-4 py-3 rounded-xl">
+          <Toast nativeID={id} className="bg-red-600/20 border border-red-500/50 mt-24 px-4 py-3 rounded-xl">
             <VStack>
               <ToastTitle className="text-red-400 font-bold text-sm">Error</ToastTitle>
               <ToastDescription className="text-zinc-300 text-xs mt-0.5">Could not update your name. Try again.</ToastDescription>

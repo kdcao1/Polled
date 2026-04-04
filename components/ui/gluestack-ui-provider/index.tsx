@@ -2,8 +2,8 @@ import React, { useEffect } from 'react';
 import { config } from './config';
 import { View, ViewProps } from 'react-native';
 import { OverlayProvider } from '@gluestack-ui/core/overlay/creator';
-import { ToastProvider } from '@gluestack-ui/core/toast/creator';
 import { useColorScheme } from 'nativewind';
+import { ToastProvider } from '@/components/ui/toast';
 
 export type ModeType = 'light' | 'dark' | 'system';
 

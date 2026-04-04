@@ -7,10 +7,11 @@ import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { collection, addDoc, serverTimestamp, doc, updateDoc, getDoc, query, where, getDocs } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../../config/firebaseConfig';
 import { trackEvent } from '@/utils/analytics';
 import type { PollEndCondition } from '@/utils/eventItems';
+import { enqueueNotificationJob } from '@/utils/notificationJobs';
 
 type CreateItemType = 'poll' | 'role';
 type Step = 0 | 1 | 2;
@@ -46,6 +47,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
   const [question, setQuestion] = useState('');
   const [choices, setChoices] = useState<string[]>(createBlankChoices());
   const [allowMultiple, setAllowMultiple] = useState(false);
+  const [allowInviteeChoices, setAllowInviteeChoices] = useState(false);
   const [endCondition, setEndCondition] = useState<PollEndCondition>('time');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [durationHours, setDurationHours] = useState<number>(24);
@@ -54,40 +56,16 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
   const [slotLimit, setSlotLimit] = useState('1');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const sendPushToEventMembers = async (title: string, body: string) => {
+  const queueNotificationJob = async (type: 'poll_created' | 'role_created', title: string, body: string) => {
     try {
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('joinedEvents', 'array-contains', eventId));
-      const snapshot = await getDocs(q);
-
-      const currentUid = auth.currentUser?.uid;
-      const tokens: string[] = [];
-
-      snapshot.forEach((snap) => {
-        const userData = snap.data();
-        if (snap.id !== currentUid && userData.expoPushToken) {
-          tokens.push(userData.expoPushToken);
-        }
-      });
-
-      if (tokens.length === 0) return;
-
-      await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Accept-encoding': 'gzip, deflate',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          to: tokens,
-          sound: 'default',
-          title,
-          body,
-        }),
+      await enqueueNotificationJob({
+        eventId,
+        type,
+        title,
+        body,
       });
     } catch (error) {
-      console.error('Error sending push notifications:', error);
+      console.error('Error queueing notification job:', error);
     }
   };
 
@@ -95,8 +73,9 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
     setCreateType(linkedField ? 'poll' : 'poll');
     setStep(linkedField ? 1 : 0);
     setQuestion(initialQuestion || '');
-    setChoices(initialChoices && initialChoices.length > 0 ? initialChoices : createBlankChoices());
+    setChoices(initialChoices && initialChoices.length > 0 ? [...initialChoices] : createBlankChoices());
     setAllowMultiple(false);
+    setAllowInviteeChoices(false);
     setEndCondition('time');
     setDurationHours(24);
     setTargetVoteCount('5');
@@ -131,6 +110,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
             : [pollData.question || '']
         );
         setAllowMultiple(!!pollData.allowMultiple);
+        setAllowInviteeChoices(!!pollData.allowInviteeChoices);
         setEndCondition(pollData.endCondition === 'vote_count' ? 'vote_count' : 'time');
         setDurationHours(24);
         setTargetVoteCount(pollData.targetVoteCount ? String(pollData.targetVoteCount) : '5');
@@ -206,6 +186,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
             type: 'poll',
             question: question.trim(),
             allowMultiple,
+            allowInviteeChoices,
             options: updatedOptions,
             expiresAt,
             endCondition,
@@ -225,6 +206,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
             type: 'poll',
             question: question.trim(),
             allowMultiple,
+            allowInviteeChoices,
             options: choices.map((choice) => ({ text: choice.trim(), voterIds: [] })),
             createdAt: serverTimestamp(),
             status: 'active',
@@ -242,7 +224,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
           });
         }
 
-        await sendPushToEventMembers('New Poll Available!', question.trim());
+        await queueNotificationJob('poll_created', 'New Poll Available!', question.trim());
       } else {
         const parsedSlotLimit = slotLimitMode === 'limited' ? Number.parseInt(slotLimit, 10) : null;
 
@@ -261,6 +243,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
             type: 'role',
             question: question.trim(),
             allowMultiple: false,
+            allowInviteeChoices: false,
             options: [{ text: question.trim(), voterIds: existingAssignees }],
             expiresAt: null,
             endCondition: null,
@@ -279,6 +262,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
             type: 'role',
             question: question.trim(),
             allowMultiple: false,
+            allowInviteeChoices: false,
             options: [{ text: question.trim(), voterIds: [] }],
             createdAt: serverTimestamp(),
             status: 'active',
@@ -296,7 +280,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
           });
         }
 
-        await sendPushToEventMembers('New Role Available!', `${question.trim()} is now open to claim.`);
+        await queueNotificationJob('role_created', 'New Role Available!', `${question.trim()} is now open to claim.`);
       }
 
       handleClearForm();
@@ -417,6 +401,18 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
         <Switch
           value={allowMultiple}
           onValueChange={setAllowMultiple}
+          trackColor={{ false: '#3f3f46', true: '#2563eb' }}
+        />
+      </HStack>
+
+      <HStack className="justify-between items-center bg-zinc-800 p-4 rounded-xl border border-zinc-700">
+        <VStack className="flex-1 pr-4">
+          <Text className="text-zinc-50 font-bold">Invitees Can Add Choices</Text>
+          <Text className="text-zinc-400 text-xs mt-1">Let non-organizers suggest new options directly in the poll.</Text>
+        </VStack>
+        <Switch
+          value={allowInviteeChoices}
+          onValueChange={setAllowInviteeChoices}
           trackColor={{ false: '#3f3f46', true: '#2563eb' }}
         />
       </HStack>

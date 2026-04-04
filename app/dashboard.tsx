@@ -6,37 +6,42 @@ import { HStack } from '@/components/ui/hstack';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
+import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import { useRouter } from 'expo-router';
-import { doc, deleteDoc, updateDoc, arrayRemove } from 'firebase/firestore';
+import { deleteDoc, doc, updateDoc, arrayRemove, serverTimestamp } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 import { useDashboard, EventData } from '../hooks/useDashboard';
 import { Settings, MoreVertical } from 'lucide-react-native';
 import EventActionModal from '@/components/custom/EventActionModal';
 import EventSummaryBadge from '@/components/custom/EventSummaryBadge'; // Ensure this path matches where you saved it!
 import { trackEvent } from '@/utils/analytics';
+import { getEventStatusLabel } from '@/utils/eventStatus';
+import { deleteEventCompletely } from '@/utils/eventDeletion';
 
 export default function DashboardScreen() {
-  const { events, loading, removeEvent } = useDashboard();
+  const { events, loading, removeEvent, updateEvent } = useDashboard();
   const router = useRouter();
   const { width } = useWindowDimensions();
   const isMobile = width < 640;
+  const toast = useToast();
 
   const currentUid = auth.currentUser?.uid;
 
   const [actionEvent, setActionEvent] = useState<EventData | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isEnding, setIsEnding] = useState(false);
 
   const handleConfirmAction = async () => {
     if (!actionEvent) return;
     setIsDeleting(true);
 
     try {
-      const userRef = doc(db, 'users', currentUid!);
-      await updateDoc(userRef, { joinedEvents: arrayRemove(actionEvent.id) });
-      
-      // If they are the organizer, delete the whole event from the database
       if (actionEvent.organizerId === currentUid) {
-        await deleteDoc(doc(db, 'events', actionEvent.id));
+        await deleteEventCompletely(actionEvent.id);
+      } else {
+        const userRef = doc(db, 'users', currentUid!);
+        await updateDoc(userRef, { joinedEvents: arrayRemove(actionEvent.id) });
+        await deleteDoc(doc(db, 'events', actionEvent.id, 'members', currentUid!));
       }
       
       removeEvent(actionEvent.id);
@@ -49,6 +54,49 @@ export default function DashboardScreen() {
       console.error('Error removing event:', error);
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleEndEvent = async () => {
+    if (!actionEvent || actionEvent.organizerId !== currentUid || actionEvent.status === 'ended') return;
+    setIsEnding(true);
+
+    try {
+      await updateDoc(doc(db, 'events', actionEvent.id), {
+        status: 'ended',
+        endedAt: serverTimestamp(),
+      });
+
+      updateEvent(actionEvent.id, { status: 'ended' });
+      trackEvent('event_ended_manual', { event_id: actionEvent.id, source: 'dashboard_menu' });
+      setActionEvent(null);
+
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-green-400 font-bold text-sm">Event Ended</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Voting is now closed for everyone.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+    } catch (error) {
+      console.error('Error ending event:', error);
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-red-400 font-bold text-sm">Could not end event</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Please try again in a moment.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+    } finally {
+      setIsEnding(false);
     }
   };
 
@@ -163,8 +211,8 @@ export default function DashboardScreen() {
                     <VStack className="gap-2 bg-zinc-900/30 p-3 rounded-xl border border-zinc-700/50">
                       <HStack className="justify-between items-center">
                         <Text className="text-zinc-400 text-sm font-medium">Status</Text>
-                        <Text className={`text-sm font-bold ${event.status === 'voting' ? 'text-green-400' : 'text-zinc-500'}`}>
-                          {event.status === 'voting' ? 'Active' : 'Closed'}
+                        <Text className={`text-sm font-bold ${event.status === 'voting' ? 'text-green-400' : 'text-red-300'}`}>
+                          {getEventStatusLabel(event)}
                         </Text>
                       </HStack>
                       
@@ -196,12 +244,14 @@ export default function DashboardScreen() {
         event={actionEvent}
         currentUid={currentUid}
         isDeleting={isDeleting}
+        isEnding={isEnding}
         onClose={() => setActionEvent(null)}
         onEdit={(id) => {
           setActionEvent(null);
           router.push(`/edit/${id}`);
         }}
         onConfirmAction={handleConfirmAction}
+        onEndEvent={handleEndEvent}
       />
 
     </Box>

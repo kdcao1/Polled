@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -7,9 +7,21 @@ import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter } from 'expo-router';
 import { trackEvent } from '@/utils/analytics';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function LandingScreen() {
   const router = useRouter();
+  const { user, isLoading } = useAuth();
+
+  useEffect(() => {
+    if (!isLoading && user) {
+      router.replace('/dashboard');
+    }
+  }, [user, isLoading, router]);
+
+  if (!isLoading && user) {
+    return null;
+  }
 
   return (
     <Box className="flex-1 bg-zinc-900 items-center justify-center px-8">

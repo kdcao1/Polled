@@ -51,7 +51,7 @@ export default function ParticipantsModal({ visible, onClose, participantIds, ro
         
         const fetched = await Promise.all(
           safeParticipantIds.map(async (uid) => {
-            const userDoc = await getDoc(doc(db, 'users', uid));
+            const userDoc = await getDoc(doc(db, 'profiles', uid));
             return {
               id: uid,
               name: userDoc.exists() ? (userDoc.data().displayName || 'Anonymous User') : 'Unknown User'

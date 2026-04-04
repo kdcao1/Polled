@@ -1,240 +1,198 @@
 'use client';
 import React from 'react';
-import { createToastHook } from '@gluestack-ui/core/toast/creator';
-import { AccessibilityInfo, Text, View, ViewStyle } from 'react-native';
-import { tva } from '@gluestack-ui/utils/nativewind-utils';
-import { cssInterop } from 'nativewind';
-import {
-  Motion,
-  AnimatePresence,
-  MotionComponentProps,
-} from '@legendapp/motion';
-import {
-  withStyleContext,
-  useStyleContext,
-} from '@gluestack-ui/utils/nativewind-utils';
-import type { VariantProps } from '@gluestack-ui/utils/nativewind-utils';
+import { Text, View, StyleSheet } from 'react-native';
 
-type IMotionViewProps = React.ComponentProps<typeof View> &
-  MotionComponentProps<typeof View, ViewStyle, unknown, unknown, unknown>;
+type ToastPlacement =
+  | 'top'
+  | 'top left'
+  | 'top right'
+  | 'bottom'
+  | 'bottom left'
+  | 'bottom right';
 
-const MotionView = Motion.View as React.ComponentType<IMotionViewProps>;
+type ToastRenderParams = {
+  id: string;
+};
 
-const useToast = createToastHook(MotionView, AnimatePresence);
-const SCOPE = 'TOAST';
+type ToastOptions = {
+  id?: string;
+  placement?: ToastPlacement;
+  duration?: number | null;
+  render: (params: ToastRenderParams) => React.ReactNode;
+};
 
-cssInterop(MotionView, { className: 'style' });
+type ToastRecord = {
+  id: string;
+  placement: ToastPlacement;
+  node: React.ReactNode;
+};
 
-const toastStyle = tva({
-  base: 'p-4 m-1 rounded-md gap-1 web:pointer-events-auto shadow-hard-5 border-outline-100',
-  variants: {
-    action: {
-      error: 'bg-error-800',
-      warning: 'bg-warning-700',
-      success: 'bg-success-700',
-      info: 'bg-info-700',
-      muted: 'bg-background-800',
-    },
+type ToastContextValue = {
+  show: (options: ToastOptions) => string;
+  close: (id: string) => void;
+  closeAll: () => void;
+  isActive: (id: string) => boolean;
+};
 
-    variant: {
-      solid: '',
-      outline: 'border bg-background-0',
-    },
-  },
-});
+const ToastContext = React.createContext<ToastContextValue | null>(null);
 
-const toastTitleStyle = tva({
-  base: 'text-typography-0 font-medium font-body tracking-md text-left',
-  variants: {
-    isTruncated: {
-      true: '',
-    },
-    bold: {
-      true: 'font-bold',
-    },
-    underline: {
-      true: 'underline',
-    },
-    strikeThrough: {
-      true: 'line-through',
-    },
-    size: {
-      '2xs': 'text-2xs',
-      'xs': 'text-xs',
-      'sm': 'text-sm',
-      'md': 'text-base',
-      'lg': 'text-lg',
-      'xl': 'text-xl',
-      '2xl': 'text-2xl',
-      '3xl': 'text-3xl',
-      '4xl': 'text-4xl',
-      '5xl': 'text-5xl',
-      '6xl': 'text-6xl',
-    },
-  },
-  parentVariants: {
-    variant: {
-      solid: '',
-      outline: '',
-    },
-    action: {
-      error: '',
-      warning: '',
-      success: '',
-      info: '',
-      muted: '',
-    },
-  },
-  parentCompoundVariants: [
-    {
-      variant: 'outline',
-      action: 'error',
-      class: 'text-error-800',
-    },
-    {
-      variant: 'outline',
-      action: 'warning',
-      class: 'text-warning-800',
-    },
-    {
-      variant: 'outline',
-      action: 'success',
-      class: 'text-success-800',
-    },
-    {
-      variant: 'outline',
-      action: 'info',
-      class: 'text-info-800',
-    },
-    {
-      variant: 'outline',
-      action: 'muted',
-      class: 'text-background-800',
-    },
-  ],
-});
+const DEFAULT_PLACEMENT: ToastPlacement = 'top';
+const DEFAULT_DURATION = 5000;
 
-const toastDescriptionStyle = tva({
-  base: 'font-normal font-body tracking-md text-left',
-  variants: {
-    isTruncated: {
-      true: '',
-    },
-    bold: {
-      true: 'font-bold',
-    },
-    underline: {
-      true: 'underline',
-    },
-    strikeThrough: {
-      true: 'line-through',
-    },
-    size: {
-      '2xs': 'text-2xs',
-      'xs': 'text-xs',
-      'sm': 'text-sm',
-      'md': 'text-base',
-      'lg': 'text-lg',
-      'xl': 'text-xl',
-      '2xl': 'text-2xl',
-      '3xl': 'text-3xl',
-      '4xl': 'text-4xl',
-      '5xl': 'text-5xl',
-      '6xl': 'text-6xl',
-    },
-  },
-  parentVariants: {
-    variant: {
-      solid: 'text-typography-50',
-      outline: 'text-typography-900',
-    },
-  },
-});
+const placementStyles: Record<ToastPlacement, object> = {
+  top: { top: 0, left: 0, right: 0, alignItems: 'center' },
+  'top left': { top: 0, left: 0, alignItems: 'flex-start' },
+  'top right': { top: 0, right: 0, alignItems: 'flex-end' },
+  bottom: { bottom: 0, left: 0, right: 0, alignItems: 'center' },
+  'bottom left': { bottom: 0, left: 0, alignItems: 'flex-start' },
+  'bottom right': { bottom: 0, right: 0, alignItems: 'flex-end' },
+};
 
-const Root = withStyleContext(View, SCOPE);
-type IToastProps = React.ComponentProps<typeof Root> & {
-  className?: string;
-} & VariantProps<typeof toastStyle>;
+export function ToastProvider({ children }: { children?: React.ReactNode }) {
+  const [toasts, setToasts] = React.useState<ToastRecord[]>([]);
+  const timeoutsRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const nextIdRef = React.useRef(1);
 
-const Toast = React.forwardRef<React.ComponentRef<typeof Root>, IToastProps>(
-  function Toast(
-    { className, variant = 'solid', action = 'muted', ...props },
-    ref
-  ) {
-    return (
-      <Root
-        ref={ref}
-        className={toastStyle({ variant, action, class: className })}
-        context={{ variant, action }}
-        {...props}
-      />
-    );
-  }
-);
+  const close = React.useCallback((id: string) => {
+    const timeout = timeoutsRef.current[id];
+    if (timeout) {
+      clearTimeout(timeout);
+      delete timeoutsRef.current[id];
+    }
 
-type IToastTitleProps = React.ComponentProps<typeof Text> & {
-  className?: string;
-} & VariantProps<typeof toastTitleStyle>;
+    setToasts((currentToasts) => currentToasts.filter((toast) => toast.id !== id));
+  }, []);
 
-const ToastTitle = React.forwardRef<
-  React.ComponentRef<typeof Text>,
-  IToastTitleProps
->(function ToastTitle({ className, size = 'md', children, ...props }, ref) {
-  const { variant: parentVariant, action: parentAction } =
-    useStyleContext(SCOPE);
+  const closeAll = React.useCallback(() => {
+    Object.values(timeoutsRef.current).forEach((timeout) => clearTimeout(timeout));
+    timeoutsRef.current = {};
+    setToasts([]);
+  }, []);
+
+  const isActive = React.useCallback(
+    (id: string) => toasts.some((toast) => toast.id === id),
+    [toasts]
+  );
+
+  const show = React.useCallback(
+    ({ id, placement = DEFAULT_PLACEMENT, duration = DEFAULT_DURATION, render }: ToastOptions) => {
+      const toastId = id ?? `toast-${nextIdRef.current++}`;
+      const node = render({ id: toastId });
+
+      setToasts((currentToasts) => [
+        ...currentToasts.filter((toast) => toast.id !== toastId),
+        { id: toastId, placement, node },
+      ]);
+
+      const existingTimeout = timeoutsRef.current[toastId];
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
+
+      if (duration !== null) {
+        timeoutsRef.current[toastId] = setTimeout(() => {
+          close(toastId);
+        }, duration);
+      }
+
+      return toastId;
+    },
+    [close]
+  );
+
   React.useEffect(() => {
-    // Issue from react-native side
-    // Hack for now, will fix this later
-    AccessibilityInfo.announceForAccessibility(children as string);
-  }, [children]);
+    return () => {
+      Object.values(timeoutsRef.current).forEach((timeout) => clearTimeout(timeout));
+    };
+  }, []);
+
+  const groupedToasts = React.useMemo(() => {
+    return toasts.reduce<Record<ToastPlacement, ToastRecord[]>>((acc, toast) => {
+      acc[toast.placement] = [...(acc[toast.placement] || []), toast];
+      return acc;
+    }, {} as Record<ToastPlacement, ToastRecord[]>);
+  }, [toasts]);
+
+  const contextValue = React.useMemo(
+    () => ({ show, close, closeAll, isActive }),
+    [show, close, closeAll, isActive]
+  );
 
   return (
-    <Text
-      {...props}
-      ref={ref}
-      aria-live="assertive"
-      aria-atomic="true"
-      role="alert"
-      className={toastTitleStyle({
-        size,
-        class: className,
-        parentVariants: {
-          variant: parentVariant,
-          action: parentAction,
-        },
-      })}
-    >
+    <ToastContext.Provider value={contextValue}>
       {children}
-    </Text>
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+        {(Object.keys(groupedToasts) as ToastPlacement[]).map((placement) => (
+          <View
+            key={placement}
+            pointerEvents="none"
+            style={[styles.placementContainer, placementStyles[placement]]}
+          >
+            {groupedToasts[placement].map((toast) => (
+              <View key={toast.id} pointerEvents="none" style={styles.toastWrapper}>
+                {toast.node}
+              </View>
+            ))}
+          </View>
+        ))}
+      </View>
+    </ToastContext.Provider>
   );
+}
+
+export function useToast() {
+  const context = React.useContext(ToastContext);
+
+  if (!context) {
+    throw new Error('useToast must be used within a ToastProvider');
+  }
+
+  return context;
+}
+
+type BaseToastProps = React.ComponentProps<typeof View> & {
+  className?: string;
+};
+
+const Toast = React.forwardRef<View, BaseToastProps>(function Toast(
+  { className, pointerEvents = 'none', ...props },
+  ref
+) {
+  return <View ref={ref} pointerEvents={pointerEvents} className={className} {...props} />;
 });
 
-type IToastDescriptionProps = React.ComponentProps<typeof Text> & {
+type BaseTextProps = React.ComponentProps<typeof Text> & {
   className?: string;
-} & VariantProps<typeof toastDescriptionStyle>;
+};
 
-const ToastDescription = React.forwardRef<
-  React.ComponentRef<typeof Text>,
-  IToastDescriptionProps
->(function ToastDescription({ className, size = 'md', ...props }, ref) {
-  const { variant: parentVariant } = useStyleContext(SCOPE);
-  return (
-    <Text
-      ref={ref}
-      {...props}
-      className={toastDescriptionStyle({
-        size,
-        class: className,
-        parentVariants: {
-          variant: parentVariant,
-        },
-      })}
-    />
-  );
+const ToastTitle = React.forwardRef<Text, BaseTextProps>(function ToastTitle(
+  { className, ...props },
+  ref
+) {
+  return <Text ref={ref} className={className} {...props} />;
+});
+
+const ToastDescription = React.forwardRef<Text, BaseTextProps>(function ToastDescription(
+  { className, ...props },
+  ref
+) {
+  return <Text ref={ref} className={className} {...props} />;
+});
+
+const styles = StyleSheet.create({
+  placementContainer: {
+    position: 'absolute',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    width: '100%',
+  },
+  toastWrapper: {
+    pointerEvents: 'none',
+  },
 });
 
 Toast.displayName = 'Toast';
 ToastTitle.displayName = 'ToastTitle';
 ToastDescription.displayName = 'ToastDescription';
 
-export { useToast, Toast, ToastTitle, ToastDescription };
+export { Toast, ToastTitle, ToastDescription };

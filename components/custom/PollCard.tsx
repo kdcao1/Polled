@@ -6,6 +6,7 @@ import { HStack } from '@/components/ui/hstack';
 import { Text } from '@/components/ui/text';
 import { Box } from '@/components/ui/box';
 import { Button, ButtonText } from '@/components/ui/button';
+import { Input, InputField } from '@/components/ui/input';
 import { getEventItemType, getResponseCount, isEventItemExpired, isRoleItemFull } from '@/utils/eventItems';
 
 interface PollCardProps {
@@ -15,6 +16,7 @@ interface PollCardProps {
   showResults?: boolean;
   currentUid?: string;
   onVote: (pollId: string, optionIndex: number | number[], currentOptions: any[], allowMultipleVotes: boolean) => void;
+  onAddChoice?: (pollId: string, choiceText: string) => Promise<boolean>;
   onActionPress?: (poll: any) => void;
 }
 
@@ -32,7 +34,7 @@ const formatTimeLeft = (expirationDate: Date) => {
   return 'Ends in < 1m';
 };
 
-export default function PollCard({ poll, compact = false, isOrganizer = false, showResults = false, currentUid, onVote, onActionPress }: PollCardProps) {
+export default function PollCard({ poll, compact = false, isOrganizer = false, showResults = false, currentUid, onVote, onAddChoice, onActionPress }: PollCardProps) {
   const itemType = getEventItemType(poll);
   const isRole = itemType === 'role';
   const totalVotes = getResponseCount(poll);
@@ -55,6 +57,9 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
 
   const [isEditingMultiple, setIsEditingMultiple] = useState(false);
   const [localSelections, setLocalSelections] = useState<number[]>([]);
+  const [isAddingChoice, setIsAddingChoice] = useState(false);
+  const [newChoiceText, setNewChoiceText] = useState('');
+  const [isSubmittingChoice, setIsSubmittingChoice] = useState(false);
 
   useEffect(() => {
     if (!isEditingMultiple && poll?.options && currentUid && !isRole) {
@@ -78,6 +83,14 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
     }, 60000);
     return () => clearInterval(interval);
   }, [expiresAtMs, isExpired, poll.endCondition, isRole]);
+
+  useEffect(() => {
+    if (isExpired) {
+      setIsAddingChoice(false);
+      setNewChoiceText('');
+      setIsSubmittingChoice(false);
+    }
+  }, [isExpired]);
 
   const displayResults = showResults || isExpired;
   const pulseAnim = useRef(new Animated.Value(0.1)).current;
@@ -114,6 +127,7 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
 
   const maxVotes = !isRole ? Math.max(0, ...poll.options.map((o: any) => o.voterIds.length)) : 0;
   const winners = !isRole ? poll.options.filter((o: any) => o.voterIds.length === maxVotes && maxVotes > 0) : [];
+  const canInviteesAddChoices = !isRole && !!poll.allowInviteeChoices && !isOrganizer && !displayResults && !isExpired && !!onAddChoice;
 
   const renderTag = (label: string, colors: { backgroundColor: string; borderColor: string; textColor: string }) => (
     <Box
@@ -379,6 +393,67 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
             <ButtonText className="font-bold text-white">Confirm Votes</ButtonText>
           </Button>
         </HStack>
+      )}
+
+      {canInviteesAddChoices && (
+        <VStack className="gap-3 mt-2">
+          {isAddingChoice ? (
+            <>
+              <Input variant="outline" size={compact ? 'md' : 'lg'} className="border-zinc-700 bg-zinc-900/60">
+                <InputField
+                  value={newChoiceText}
+                  onChangeText={setNewChoiceText}
+                  placeholder="Suggest another option"
+                  placeholderTextColor="#71717a"
+                  className="text-zinc-50"
+                  editable={!isSubmittingChoice}
+                />
+              </Input>
+              <HStack className="justify-end gap-3">
+                <Button
+                  size="sm"
+                  variant="link"
+                  isDisabled={isSubmittingChoice}
+                  onPress={() => {
+                    setIsAddingChoice(false);
+                    setNewChoiceText('');
+                  }}
+                >
+                  <ButtonText className="text-zinc-400">Cancel</ButtonText>
+                </Button>
+                <Button
+                  size="sm"
+                  action="primary"
+                  className="bg-blue-600 border-0"
+                  isDisabled={isSubmittingChoice || !newChoiceText.trim()}
+                  onPress={async () => {
+                    if (!onAddChoice || !newChoiceText.trim()) return;
+                    setIsSubmittingChoice(true);
+                    const didAdd = await onAddChoice(poll.id, newChoiceText);
+                    setIsSubmittingChoice(false);
+                    if (didAdd) {
+                      setIsAddingChoice(false);
+                      setNewChoiceText('');
+                    }
+                  }}
+                >
+                  <ButtonText className="font-bold text-white">
+                    {isSubmittingChoice ? 'Adding...' : 'Add Choice'}
+                  </ButtonText>
+                </Button>
+              </HStack>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="self-start border-zinc-600 bg-zinc-900/50"
+              onPress={() => setIsAddingChoice(true)}
+            >
+              <ButtonText className="font-bold text-zinc-100">+ Add a Choice</ButtonText>
+            </Button>
+          )}
+        </VStack>
       )}
     </VStack>
   );

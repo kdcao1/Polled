@@ -6,7 +6,7 @@ import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { collection, query, where, getDocs, doc, setDoc, arrayUnion } from 'firebase/firestore';
+import { getDoc, doc, setDoc, arrayUnion, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { KeyboardAvoidingView, Platform } from 'react-native';
 import { db, auth } from '../config/firebaseConfig';
 import { trackEvent } from '@/utils/analytics';
@@ -28,26 +28,31 @@ export default function JoinScreen() {
     trackEvent('event_join_attempt', { code_length: code.length });
 
     try {
-      // 1. Search the database for an event containing this join code
-      const q = query(collection(db, 'events'), where('joinCode', '==', code));
-      const querySnapshot = await getDocs(q);
+      // 1. Resolve the invite code to a secure event ID
+      const joinCodeDoc = await getDoc(doc(db, 'joinCodes', code));
 
-      if (querySnapshot.empty) {
+      if (!joinCodeDoc.exists()) {
         trackEvent('event_join_failed', { reason: 'code_not_found' });
         setErrorMsg("We couldn't find an event with that code.");
         setIsJoining(false);
         return;
       }
 
-      // 2. We found it! Grab the secure Firestore ID from the document
-      const eventDoc = querySnapshot.docs[0];
-      const secureEventId = eventDoc.id;
+      const secureEventId = joinCodeDoc.data().eventId as string;
 
       // 3. Add this event to the user's dashboard array
       const userRef = doc(db, 'users', auth.currentUser.uid);
-      await setDoc(userRef, {
+      const memberRef = doc(db, 'events', secureEventId, 'members', auth.currentUser.uid);
+      const batch = writeBatch(db);
+      batch.set(userRef, {
         joinedEvents: arrayUnion(secureEventId)
       }, { merge: true });
+      batch.set(memberRef, {
+        uid: auth.currentUser.uid,
+        joinedAt: serverTimestamp(),
+        role: 'participant',
+      }, { merge: true });
+      await batch.commit();
 
       trackEvent('event_joined', { event_id: secureEventId });
 

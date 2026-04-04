@@ -14,6 +14,7 @@ import { auth } from '../config/firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { trackEvent } from '@/utils/analytics';
+import { googleAuthConfig, hasGoogleAuthConfig } from '@/config/env';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -31,7 +32,7 @@ export default function LoginScreen() {
       render: ({ id }) => (
         <Toast 
           nativeID={id} 
-          className={`mt-12 px-4 py-3 rounded-xl border ${type === 'success' ? 'bg-green-600/20 border-green-500/50' : 'bg-red-600/20 border-red-500/50'}`}
+          className={`mt-24 px-4 py-3 rounded-xl border ${type === 'success' ? 'bg-green-600/20 border-green-500/50' : 'bg-red-600/20 border-red-500/50'}`}
         >
           <VStack>
             <ToastTitle className={`font-bold text-sm ${type === 'success' ? 'text-green-400' : 'text-red-400'}`}>
@@ -49,10 +50,7 @@ export default function LoginScreen() {
   // -------------------------------------------------------------------------
   // GOOGLE LOGIN SETUP
   // -------------------------------------------------------------------------
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    webClientId: '1059076773398-0oicat1eqqohtsrhrajpbsm67spk2u9s.apps.googleusercontent.com',
-    iosClientId: '79016124142-vstsqihv3ahndlhirremvhdtl8mt99j0.apps.googleusercontent.com',
-  });
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(googleAuthConfig);
 
   useEffect(() => {
     if (response?.type === 'success') {
@@ -139,7 +137,7 @@ export default function LoginScreen() {
                 trackEvent('login_attempt', { method: 'google' });
                 promptAsync();
               }}
-              isDisabled={!request || isLoggingIn}
+              isDisabled={!request || isLoggingIn || !hasGoogleAuthConfig}
             >
               {isLoggingIn ? (
                 <ButtonSpinner color="#18181b" /> 

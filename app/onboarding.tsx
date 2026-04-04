@@ -27,6 +27,9 @@ export default function OnboardingScreen() {
         displayName: name.trim(),
         joinedEvents: [] 
       }, { merge: true });
+      await setDoc(doc(db, 'profiles', auth.currentUser.uid), {
+        displayName: name.trim(),
+      }, { merge: true });
 
       trackEvent('onboarding_completed', {
         has_next_destination: typeof next === 'string',

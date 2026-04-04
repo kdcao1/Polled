@@ -1,0 +1,22 @@
+{
+  "name": "polled-notification-worker",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node lib/index.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "expo-server-sdk": "^3.13.0",
+    "firebase-admin": "^12.7.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  }
+}

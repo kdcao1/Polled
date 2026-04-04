@@ -10,34 +10,40 @@ type Props = {
   event: EventData | null;
   currentUid: string | undefined;
   isDeleting: boolean;
+  isEnding: boolean;
   onClose: () => void;
   onEdit: (eventId: string) => void;
   onConfirmAction: () => void;
+  onEndEvent: () => void;
 };
 
 export default function EventActionModal({ 
   event, 
   currentUid, 
   isDeleting, 
+  isEnding,
   onClose, 
   onEdit, 
-  onConfirmAction 
+  onConfirmAction,
+  onEndEvent,
 }: Props) {
   
-  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmMode, setConfirmMode] = useState<'remove' | 'end' | null>(null);
 
   useEffect(() => {
     if (!event) {
-      setShowConfirm(false);
+      setConfirmMode(null);
     }
   }, [event]);
 
   if (!event) return null;
 
   const isOrganizer = event.organizerId === currentUid;
+  const isEnded = event.status === 'ended';
+  const isBusy = isDeleting || isEnding;
 
   const handleClose = () => {
-    setShowConfirm(false);
+    setConfirmMode(null);
     onClose();
   };
 
@@ -61,14 +67,14 @@ export default function EventActionModal({
           
           <VStack className="gap-1 text-center items-center">
             <Heading size="xl" className="text-zinc-50">{event.title}</Heading>
-            <Text className={`text-sm ${showConfirm ? 'text-red-400 font-bold' : 'text-zinc-400'}`}>
-              {showConfirm ? 'Are you absolutely sure?' : (isOrganizer ? 'Manage your event' : 'Event options')}
+            <Text className={`text-sm ${confirmMode ? 'text-red-400 font-bold' : 'text-zinc-400'}`}>
+              {confirmMode ? 'Are you absolutely sure?' : (isOrganizer ? 'Manage your event' : 'Event options')}
             </Text>
           </VStack>
 
           <VStack className="gap-3 mt-2">
             
-            {!showConfirm ? (
+            {!confirmMode ? (
               <>
                 {isOrganizer && (
                   <Button 
@@ -81,12 +87,24 @@ export default function EventActionModal({
                   </Button>
                 )}
 
+                {isOrganizer && !isEnded && (
+                  <Button
+                    size="xl"
+                    variant="outline"
+                    className="border-amber-500/30 bg-amber-500/10 w-full"
+                    onPress={() => setConfirmMode('end')}
+                    isDisabled={isBusy}
+                  >
+                    <ButtonText className="font-bold text-amber-400">End Event</ButtonText>
+                  </Button>
+                )}
+
                 <Button 
                   size="xl" 
                   variant="outline" 
                   className="border-red-500/30 bg-red-500/10 w-full" 
-                  onPress={() => setShowConfirm(true)}
-                  isDisabled={isDeleting}
+                  onPress={() => setConfirmMode('remove')}
+                  isDisabled={isBusy}
                 >
                   <ButtonText className="font-bold text-red-500">
                     {isOrganizer ? 'Delete Event' : 'Leave Event'}
@@ -98,13 +116,15 @@ export default function EventActionModal({
                 <Button 
                   size="xl" 
                   action="primary" 
-                  className="bg-red-600 border-0 w-full" 
-                  onPress={onConfirmAction}
-                  isDisabled={isDeleting}
+                  className={`${confirmMode === 'end' ? 'bg-amber-500' : 'bg-red-600'} border-0 w-full`}
+                  onPress={confirmMode === 'end' ? onEndEvent : onConfirmAction}
+                  isDisabled={isBusy}
                 >
-                  {isDeleting ? <ButtonSpinner color="white" /> : (
+                  {isBusy ? <ButtonSpinner color="white" /> : (
                     <ButtonText className="font-bold text-white">
-                      Yes, {isOrganizer ? 'Delete' : 'Leave'}
+                      {confirmMode === 'end'
+                        ? 'Yes, End Event'
+                        : `Yes, ${isOrganizer ? 'Delete' : 'Leave'}`}
                     </ButtonText>
                   )}
                 </Button>
@@ -113,8 +133,8 @@ export default function EventActionModal({
                   size="xl" 
                   variant="outline" 
                   className="border-zinc-600 bg-zinc-800 w-full" 
-                  onPress={() => setShowConfirm(false)}
-                  isDisabled={isDeleting}
+                  onPress={() => setConfirmMode(null)}
+                  isDisabled={isBusy}
                 >
                   <ButtonText className="font-bold text-zinc-50">Nevermind</ButtonText>
                 </Button>
@@ -123,13 +143,13 @@ export default function EventActionModal({
 
           </VStack>
 
-          {!showConfirm && (
+          {!confirmMode && (
             <Button 
               size="md" 
               variant="link" 
               className="mt-2"
               onPress={handleClose}
-              isDisabled={isDeleting}
+              isDisabled={isBusy}
             >
               <ButtonText className="text-zinc-400">Cancel</ButtonText>
             </Button>

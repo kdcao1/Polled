@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
+import { arrayRemove, doc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 import { useFocusEffect } from 'expo-router';
+import { shouldAutoEndEvent } from '@/utils/eventStatus';
 
 export interface PollSummary {
   totalPolls: number;
@@ -15,6 +16,7 @@ export interface EventData {
   time: string,
   location: string,
   status: string;
+  scheduledAt?: string | null;
   joinCode?: string;
   organizerId?: string;
   summary?: PollSummary;
@@ -39,16 +41,37 @@ export const useDashboard = () => {
 
           if (userDoc.exists()) {
             const joinedEvents = userDoc.data().joinedEvents || [];
+            const missingEventIds: string[] = [];
 
             const eventPromises = joinedEvents.map(async (eventId: string) => {
               const eventDoc = await getDoc(doc(db, 'events', eventId));
               if (eventDoc.exists()) {
-                return { id: eventId, ...eventDoc.data() } as EventData;
+                const eventData = eventDoc.data();
+
+                if (shouldAutoEndEvent(eventData)) {
+                  await updateDoc(doc(db, 'events', eventId), {
+                    status: 'ended',
+                    endedAt: serverTimestamp(),
+                  });
+
+                  return { id: eventId, ...eventData, status: 'ended' } as EventData;
+                }
+
+                return { id: eventId, ...eventData } as EventData;
               }
+
+              missingEventIds.push(eventId);
               return null;
             });
 
             const eventResults = await Promise.all(eventPromises);
+
+            if (missingEventIds.length > 0) {
+              await updateDoc(doc(db, 'users', user.uid), {
+                joinedEvents: arrayRemove(...missingEventIds),
+              });
+            }
+
             setEvents(eventResults.filter(e => e !== null) as EventData[]);
           }
         } catch (error) {
@@ -66,5 +89,11 @@ export const useDashboard = () => {
     setEvents((prev) => prev.filter((e) => e.id !== eventId));
   };
 
-  return { events, loading, removeEvent };
+  const updateEvent = (eventId: string, updates: Partial<EventData>) => {
+    setEvents((prev) => prev.map((event) => (
+      event.id === eventId ? { ...event, ...updates } : event
+    )));
+  };
+
+  return { events, loading, removeEvent, updateEvent };
 };

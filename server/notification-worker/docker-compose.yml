@@ -1,0 +1,13 @@
+services:
+  notification-worker:
+    build:
+      context: .
+    container_name: polled-notification-worker
+    environment:
+      FIREBASE_PROJECT_ID: polled-f5b29
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
+      NOTIFICATION_WORKER_POLL_MS: "5000"
+      NOTIFICATION_WORKER_BATCH_SIZE: "10"
+    volumes:
+      - /absolute/path/on/host/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+    restart: unless-stopped

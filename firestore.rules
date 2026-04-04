@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function userDocPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function eventDocPath(eventId) {
+      return /databases/$(database)/documents/events/$(eventId);
+    }
+
+    function userExists(uid) {
+      return exists(userDocPath(uid));
+    }
+
+    function eventExists(eventId) {
+      return exists(eventDocPath(eventId));
+    }
+
+    function joinedEvents(uid) {
+      return userExists(uid) && get(userDocPath(uid)).data.joinedEvents is list
+        ? get(userDocPath(uid)).data.joinedEvents
+        : [];
+    }
+
+    function isEventOrganizer(eventId) {
+      return eventExists(eventId) && get(eventDocPath(eventId)).data.organizerId == request.auth.uid;
+    }
+
+    function isEventMember(eventId) {
+      return signedIn() && (
+        isEventOrganizer(eventId) ||
+        eventId in joinedEvents(request.auth.uid)
+      );
+    }
+
+    match /users/{uid} {
+      allow create: if isSelf(uid);
+      allow read, update, delete: if isSelf(uid);
+    }
+
+    match /profiles/{uid} {
+      allow read: if signedIn();
+      allow create, update: if isSelf(uid);
+      allow delete: if false;
+    }
+
+    match /joinCodes/{code} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow delete: if signedIn();
+      allow update: if false;
+    }
+
+    match /events/{eventId} {
+      allow create: if signedIn() && request.resource.data.organizerId == request.auth.uid;
+      allow read: if isEventMember(eventId);
+
+      allow update: if
+        isEventOrganizer(eventId) ||
+        (
+          isEventMember(eventId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'endedAt',
+            'time',
+            'location',
+            'scheduledAt'
+          ])
+        );
+
+      allow delete: if isEventOrganizer(eventId);
+
+      match /members/{uid} {
+        allow read: if isEventMember(eventId);
+        allow create: if signedIn() && (
+          isEventOrganizer(eventId) ||
+          isSelf(uid)
+        );
+        allow update: if isEventOrganizer(eventId) || isSelf(uid);
+        allow delete: if isEventOrganizer(eventId) || isSelf(uid);
+      }
+
+      match /polls/{pollId} {
+        allow read: if isEventMember(eventId);
+        allow create, delete: if isEventOrganizer(eventId);
+        allow update: if isEventOrganizer(eventId) || isEventMember(eventId);
+      }
+    }
+
+    match /notificationJobs/{jobId} {
+      allow create: if signedIn();
+      allow read: if false;
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

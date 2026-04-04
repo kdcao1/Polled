@@ -19,11 +19,24 @@ import ParticipantsModal from '@/components/custom/ParticipantsModal';
 import { buildJoinLink } from '@/utils/inviteLinks';
 import { trackEvent } from '@/utils/analytics';
 import { getEventItemType, getRespondedUserIds, getResponseCount, isEventItemExpired } from '@/utils/eventItems';
-import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc, getDocs, where, getDoc } from 'firebase/firestore';
-import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share } from 'react-native';
+import { getEventStatusLabel, isEventEnded, shouldAutoEndEvent } from '@/utils/eventStatus';
+import { enqueueNotificationJob } from '@/utils/notificationJobs';
+import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc, where, getDoc, serverTimestamp } from 'firebase/firestore';
+import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share, PanResponder, Animated, Easing } from 'react-native';
 import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
 
 type LinkedField = 'time' | 'location';
+const MOBILE_EVENT_TABS = ['details', 'active', 'answered'] as const;
+type EventTab = typeof MOBILE_EVENT_TABS[number];
+
+type PollModalConfig = {
+  question?: string;
+  choices?: string[];
+  pollIdToEdit?: string;
+  linkedField?: LinkedField;
+};
+
+const EMPTY_MODAL_CONFIG: PollModalConfig = {};
 
 
 export default function EventScreen() {
@@ -38,83 +51,91 @@ export default function EventScreen() {
   const [loading, setLoading] = useState(true);
   const [isOrganizer, setIsOrganizer] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'details' | 'active' | 'answered'>('details');
+  const [activeTab, setActiveTab] = useState<EventTab>('details');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalConfig, setModalConfig] = useState<{question?: string, choices?: string[], pollIdToEdit?: string, linkedField?: LinkedField}>({});
+  const [modalConfig, setModalConfig] = useState<PollModalConfig>(EMPTY_MODAL_CONFIG);
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
   const [actionPoll, setActionPoll] = useState<any>(null);
   const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
+  const [participantIds, setParticipantIds] = useState<string[]>([]);
   const quickPollSyncingRef = useRef<Record<LinkedField, string | null>>({ time: null, location: null });
+  const autoEndingEventRef = useRef(false);
+  const mobileTabOffset = useRef(new Animated.Value(0)).current;
   const [hasAccess, setHasAccess] = useState(false);
+  const [mobileTabWidth, setMobileTabWidth] = useState(0);
 
   const joinLink = buildJoinLink(eventData?.joinCode);
+  const mobileTabIndex = MOBILE_EVENT_TABS.indexOf(activeTab);
+
+  const mobileTabPanResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        const isHorizontalSwipe = Math.abs(gestureState.dx) > 24;
+        const isMostlyHorizontal = Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.3;
+        return isHorizontalSwipe && isMostlyHorizontal;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const { dx, dy } = gestureState;
+        const isMostlyHorizontal = Math.abs(dx) > Math.abs(dy) * 1.3;
+        if (!isMostlyHorizontal || Math.abs(dx) < 48) return;
+
+        setActiveTab((currentTab) => {
+          const currentIndex = MOBILE_EVENT_TABS.indexOf(currentTab);
+
+          if (dx < 0 && currentIndex < MOBILE_EVENT_TABS.length - 1) {
+            return MOBILE_EVENT_TABS[currentIndex + 1];
+          }
+
+          if (dx > 0 && currentIndex > 0) {
+            return MOBILE_EVENT_TABS[currentIndex - 1];
+          }
+
+          return currentTab;
+        });
+      },
+    })
+  ).current;
   
   const openModal = (question = '', choices = ['', ''], linkedField?: LinkedField) => {
-    setModalConfig({ question, choices, pollIdToEdit: undefined, linkedField });
+    setModalConfig({
+      question,
+      choices: [...choices],
+      pollIdToEdit: undefined,
+      linkedField,
+    });
     setIsModalOpen(true);
   };
 
-  const sendPushToEventMembers = async (title: string, body: string) => {
+  const openCreateModal = () => {
+    setModalConfig(EMPTY_MODAL_CONFIG);
+    setIsModalOpen(true);
+  };
+
+  const closePollModal = () => {
+    setIsModalOpen(false);
+    setModalConfig(EMPTY_MODAL_CONFIG);
+  };
+  const eventEnded = isEventEnded(eventData);
+
+  const queueNotificationJob = async (type: 'poll_nudge' | 'role_nudge', title: string, body: string) => {
     try {
-      // Find all users who have joined this specific event
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('joinedEvents', 'array-contains', id as string));
-      const snapshot = await getDocs(q);
-
-      const currentUid = auth.currentUser?.uid;
-      const tokens: string[] = [];
-      
-      // Extract their push tokens
-      snapshot.forEach((docSnap) => {
-        const userData = docSnap.data();
-        // Don't send a notification to the person pressing the nudge button!
-        if (docSnap.id !== currentUid && userData.expoPushToken) {
-          tokens.push(userData.expoPushToken);
-        }
+      await enqueueNotificationJob({
+        eventId: id as string,
+        type,
+        title,
+        body,
       });
-
-      if (tokens.length === 0) {
-        toast.show({
-          placement: "top",
-          render: ({ id: toastId }) => (
-            <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
-              <VStack>
-                <ToastTitle className="text-amber-400 font-bold text-sm">No one to nudge!</ToastTitle>
-                <ToastDescription className="text-zinc-300 text-xs mt-0.5">None of the other users have notifications enabled.</ToastDescription>
-              </VStack>
-            </Toast>
-          ),
-        });
-        return; 
-      }
-
-      // Send the payload to Expo's Server
-      const message = {
-        to: tokens, 
-        sound: 'default',
-        title: title,
-        body: body,
-      };
-
-      await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Accept-encoding': 'gzip, deflate',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(message),
-      });
-
     } catch (error) {
-      console.error("Error sending push notifications:", error);
+      console.error('Error queueing notification job:', error);
     }
   };
 
   // --- 2. The handler function you pass to your Poll components ---
   const handleNudge = async (poll: any) => {
+    if (eventEnded) return;
     const itemType = getEventItemType(poll);
-    await sendPushToEventMembers(
+    await queueNotificationJob(
+      itemType === 'role' ? 'role_nudge' : 'poll_nudge',
       itemType === 'role' ? 'Role still open!' : "Don't forget to vote! ⏰",
       itemType === 'role'
         ? `The role "${poll.question}" is still available to claim.`
@@ -125,7 +146,7 @@ export default function EventScreen() {
     toast.show({
       placement: "top",
       render: ({ id: toastId }) => (
-        <Toast nativeID={toastId} className="bg-zinc-800 border border-blue-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+        <Toast nativeID={toastId} className="bg-zinc-800 border border-blue-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
           <VStack>
             <ToastTitle className="text-blue-400 font-bold text-sm">Nudge Sent!</ToastTitle>
             <ToastDescription className="text-zinc-300 text-xs mt-0.5">A reminder has been sent to everyone in the event.</ToastDescription>
@@ -150,7 +171,7 @@ export default function EventScreen() {
         toast.show({
           placement: "top",
           render: ({ id: toastId }) => (
-            <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
               <VStack>
                 <ToastTitle className="text-green-400 font-bold text-sm">Shared!</ToastTitle>
                 <ToastDescription className="text-zinc-300 text-xs mt-0.5">Thanks for spreading the word about the event.</ToastDescription>
@@ -166,7 +187,7 @@ export default function EventScreen() {
       toast.show({
         placement: "top",
         render: ({ id: toastId }) => (
-          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
             <VStack>
               <ToastTitle className="text-red-400 font-bold text-sm">Sharing Failed</ToastTitle>
               <ToastDescription className="text-zinc-300 text-xs mt-0.5">Something went wrong trying to open the share menu.</ToastDescription>
@@ -187,7 +208,7 @@ export default function EventScreen() {
     toast.show({
       placement: "top",
       render: ({ id: toastId }) => (
-        <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+        <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
           <VStack>
             <ToastTitle className="text-green-400 font-bold text-sm">Copied!</ToastTitle>
             <ToastDescription className="text-zinc-300 text-xs mt-0.5">Join code copied to clipboard.</ToastDescription>
@@ -202,6 +223,7 @@ export default function EventScreen() {
 
     let unsubscribeEvent: (() => void) | undefined;
     let unsubscribePolls: (() => void) | undefined;
+    let unsubscribeParticipants: (() => void) | undefined;
 
     const initializeEventAccess = async () => {
       try {
@@ -235,8 +257,25 @@ export default function EventScreen() {
         unsubscribeEvent = onSnapshot(eventRef, (docSnap) => {
           if (docSnap.exists()) {
             const data = docSnap.data();
-            setEventData(data);
             setIsOrganizer(data.organizerId === auth.currentUser?.uid);
+
+            if (shouldAutoEndEvent(data)) {
+              if (!autoEndingEventRef.current) {
+                autoEndingEventRef.current = true;
+                void updateDoc(eventRef, {
+                  status: 'ended',
+                  endedAt: serverTimestamp(),
+                }).catch((error) => {
+                  autoEndingEventRef.current = false;
+                  console.error('Error auto-ending event:', error);
+                });
+              }
+              setEventData({ ...data, status: 'ended' });
+              return;
+            }
+
+            autoEndingEventRef.current = false;
+            setEventData(data);
           }
           setLoading(false);
         });
@@ -245,6 +284,14 @@ export default function EventScreen() {
         const q = query(pollsRef, orderBy('createdAt', 'desc'));
         unsubscribePolls = onSnapshot(q, (snapshot) => {
           setPolls(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+        });
+
+        const membersQuery = query(collection(db, 'events', id as string, 'members'));
+        unsubscribeParticipants = onSnapshot(membersQuery, (snapshot) => {
+          const nextParticipantIds = snapshot.docs
+            .map((participantDoc) => participantDoc.id)
+            .sort((a, b) => a.localeCompare(b));
+          setParticipantIds(nextParticipantIds);
         });
       } catch (error) {
         console.error('Error checking event access:', error);
@@ -258,6 +305,7 @@ export default function EventScreen() {
     return () => {
       if (unsubscribeEvent) unsubscribeEvent();
       if (unsubscribePolls) unsubscribePolls();
+      if (unsubscribeParticipants) unsubscribeParticipants();
     };
   }, [id, router]);
 
@@ -315,9 +363,34 @@ export default function EventScreen() {
     syncQuickPollDetails();
   }, [id, eventData, polls, hasAccess]);
 
+  useEffect(() => {
+    if (!isMobile || mobileTabWidth <= 0) return;
+
+    Animated.timing(mobileTabOffset, {
+      toValue: -(mobileTabIndex * mobileTabWidth),
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [isMobile, mobileTabIndex, mobileTabOffset, mobileTabWidth]);
+
   const handleVote = async (pollId: string, selectedIndices: number | number[], currentOptions: any[], allowMultipleVotes: boolean) => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
+    if (eventEnded) {
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-red-400 font-bold text-sm">Event Ended</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">This event is no longer accepting votes.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+      return;
+    }
 
     const pollRef = doc(db, 'events', id as string, 'polls', pollId);
     let updatedItemType: 'poll' | 'role' = 'poll';
@@ -383,7 +456,7 @@ export default function EventScreen() {
         toast.show({
           placement: "top",
           render: ({ id: toastId }) => (
-            <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
               <VStack>
                 <ToastTitle className="text-amber-400 font-bold text-sm">Role Filled</ToastTitle>
                 <ToastDescription className="text-zinc-300 text-xs mt-0.5">All available spots for that role have already been claimed.</ToastDescription>
@@ -395,7 +468,7 @@ export default function EventScreen() {
         toast.show({
           placement: "top",
           render: ({ id: toastId }) => (
-            <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
               <VStack>
                 <ToastTitle className="text-red-400 font-bold text-sm">Poll Ended</ToastTitle>
                 <ToastDescription className="text-zinc-300 text-xs mt-0.5">This poll is no longer accepting votes.</ToastDescription>
@@ -406,6 +479,131 @@ export default function EventScreen() {
       } else {
         console.error('Error updating vote:', error);
       }
+    }
+  };
+
+  const handleAddChoice = async (pollId: string, choiceText: string) => {
+    const uid = auth.currentUser?.uid;
+    const trimmedChoice = choiceText.trim();
+    if (!uid || !trimmedChoice) return false;
+    if (eventEnded) return false;
+
+    const pollRef = doc(db, 'events', id as string, 'polls', pollId);
+
+    try {
+      let outcome: 'added' | 'duplicate' | 'disabled' | 'expired' = 'disabled';
+
+      await runTransaction(db, async (transaction) => {
+        const pollDoc = await transaction.get(pollRef);
+        if (!pollDoc.exists()) {
+          throw new Error('NOT_FOUND');
+        }
+
+        const pollData = pollDoc.data();
+
+        if (getEventItemType(pollData) !== 'poll') {
+          throw new Error('INVALID_TYPE');
+        }
+
+        if (isEventItemExpired(pollData)) {
+          outcome = 'expired';
+          return;
+        }
+
+        if (!pollData.allowInviteeChoices) {
+          outcome = 'disabled';
+          return;
+        }
+
+        const normalizedChoice = trimmedChoice.toLocaleLowerCase();
+        const existingOptions = Array.isArray(pollData.options) ? pollData.options : [];
+        const hasDuplicate = existingOptions.some(
+          (option: any) => (option?.text || '').trim().toLocaleLowerCase() === normalizedChoice
+        );
+
+        if (hasDuplicate) {
+          outcome = 'duplicate';
+          return;
+        }
+
+        transaction.update(pollRef, {
+          options: [
+            ...existingOptions,
+            {
+              text: trimmedChoice,
+              voterIds: [],
+            },
+          ],
+        });
+
+        outcome = 'added';
+      });
+
+      const finalOutcome = outcome as 'added' | 'duplicate' | 'disabled' | 'expired';
+
+      if (finalOutcome === 'added') {
+        trackEvent('poll_choice_added_by_invitee', {
+          event_id: id as string,
+          poll_id: pollId,
+        });
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-green-400 font-bold text-sm">Choice Added</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">Your option is now part of the poll.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+        return true;
+      }
+
+      if (finalOutcome === 'duplicate') {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-amber-400 font-bold text-sm">Already There</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">That option already exists in this poll.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+        return false;
+      }
+
+      if (finalOutcome === 'expired') {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-red-400 font-bold text-sm">Poll Ended</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">This poll is no longer accepting changes.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      }
+
+      return false;
+    } catch (error) {
+      console.error('Error adding invitee poll choice:', error);
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-red-400 font-bold text-sm">Could not add choice</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Please try again in a moment.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+      return false;
     }
   };
 
@@ -464,20 +662,19 @@ export default function EventScreen() {
   };
 
   const activePolls = polls.filter((poll) => {
+    if (eventEnded) return false;
     const respondedUserIds = getRespondedUserIds(poll);
     const hasVoted = currentUid ? respondedUserIds.includes(currentUid) : false;
     return !hasVoted && !isPollExpired(poll);
   });
   const answeredPolls = polls.filter((poll) => {
+    if (eventEnded) return true;
     const respondedUserIds = getRespondedUserIds(poll);
     const hasVoted = currentUid ? respondedUserIds.includes(currentUid) : false;
     return hasVoted || isPollExpired(poll);
   });
 
-  const uniqueParticipants = new Set<string>();
   const roleAssignments = polls.reduce<Record<string, string[]>>((acc, poll) => {
-    getRespondedUserIds(poll).forEach((uid) => uniqueParticipants.add(uid));
-
     if (getEventItemType(poll) === 'role') {
       getRespondedUserIds(poll).forEach((uid) => {
         acc[uid] = [...(acc[uid] || []), poll.question];
@@ -486,7 +683,7 @@ export default function EventScreen() {
 
     return acc;
   }, {});
-  const headcount = uniqueParticipants.size;
+  const headcount = participantIds.length;
   const timeQuickPoll = getLinkedQuickPoll('time');
   const locationQuickPoll = getLinkedQuickPoll('location');
 
@@ -496,7 +693,7 @@ export default function EventScreen() {
       return <Text className="text-zinc-50 text-lg font-semibold">{currentValue}</Text>;
     }
 
-    if (!isOrganizer) {
+    if (!isOrganizer || eventEnded) {
       return <Text className="text-zinc-50 text-lg font-semibold">TBD</Text>;
     }
 
@@ -540,6 +737,71 @@ export default function EventScreen() {
       </Button>
     );
   };
+
+  const renderDetailsTab = () => (
+    <VStack className="gap-4 mt-1">
+      <VStack className="bg-zinc-800/40 p-5 rounded-2xl border border-zinc-700/50 gap-4">
+        <VStack>
+          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Status</Text>
+          <Text className={`text-lg font-bold ${eventData?.status === 'voting' ? 'text-green-400' : 'text-red-300'}`}>
+            {eventData?.status === 'voting' ? 'Active Voting' : getEventStatusLabel(eventData)}
+          </Text>
+        </VStack>
+        <View className="h-px bg-zinc-700/50 w-full" />
+        <VStack>
+          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Time</Text>
+          {renderDetailValue('time')}
+        </VStack>
+        <View className="h-px bg-zinc-700/50 w-full" />
+        <VStack>
+          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Location</Text>
+          {renderDetailValue('location')}
+        </VStack>
+        <View className="h-px bg-zinc-700/50 w-full" />
+        <HStack className="justify-between items-center">
+          <VStack>
+            <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Participants</Text>
+            <Text className="text-zinc-50 text-lg font-semibold mt-0.5">{headcount} {headcount === 1 ? 'person' : 'people'}</Text>
+          </VStack>
+          <TouchableOpacity activeOpacity={0.7} onPress={() => {
+            trackEvent('participants_modal_opened', { event_id: id as string });
+            setIsParticipantsModalOpen(true);
+          }} className="p-2 bg-zinc-700/50 rounded-full border border-zinc-600/50">
+            <Eye size={20} color="#a1a1aa" />
+          </TouchableOpacity>
+        </HStack>
+      </VStack>
+
+      {isOrganizer && (
+        <VStack className="gap-3">
+          <Button 
+            size="xl" 
+            variant="outline" 
+            className="border-zinc-600 bg-zinc-800" 
+            onPress={() => router.push(`/edit/${id as string}`)}
+          >
+            <ButtonText className="font-bold text-zinc-50">Edit Event Details</ButtonText>
+          </Button>
+        </VStack>
+      )}
+    </VStack>
+  );
+
+  const renderActiveTab = () => (
+    activePolls.length === 0 ? (
+      <EmptyState message="You're all caught up!" />
+    ) : (
+      activePolls.map((poll) => <PollCard key={poll.id} poll={poll} isOrganizer={isOrganizer && !eventEnded} currentUid={currentUid} onVote={handleVote} onAddChoice={handleAddChoice} onActionPress={setActionPoll} />)
+    )
+  );
+
+  const renderAnsweredTab = () => (
+    answeredPolls.length === 0 ? (
+      <EmptyState message="No answered polls yet." />
+    ) : (
+      answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults isOrganizer={isOrganizer && !eventEnded} currentUid={currentUid} onVote={handleVote} onAddChoice={handleAddChoice} onActionPress={setActionPoll} />)
+    )
+  );
 
   if (loading) {
     return (
@@ -620,7 +882,7 @@ export default function EventScreen() {
 
             {/* --- TABS --- */}
             <HStack className="bg-zinc-800 rounded-xl p-1 mb-4 border border-zinc-700">
-              {(['details', 'active', 'answered'] as const).map((tab) => (
+              {MOBILE_EVENT_TABS.map((tab) => (
                 <TouchableOpacity key={tab} onPress={() => setActiveTab(tab)} className={`flex-1 py-2 rounded-lg items-center ${activeTab === tab ? 'bg-zinc-600' : ''}`}>
                   <Text className={`text-xs font-semibold ${activeTab === tab ? 'text-zinc-50' : 'text-zinc-400'}`}>
                     {tab === 'details' ? 'Details' : tab === 'active' ? 'Active' : 'Results'}
@@ -630,84 +892,57 @@ export default function EventScreen() {
             </HStack>
 
             {/* --- CREATE BUTTON (Only on Active tab) --- */}
-                {isOrganizer && activeTab === 'active' && (
+                {isOrganizer && !eventEnded && activeTab === 'active' && (
               <Button size="md" action="primary" className="bg-blue-600 border-0 mb-4" onPress={() => {
                 trackEvent('item_create_started', { event_id: id as string });
-                setIsModalOpen(true);
+                openCreateModal();
               }}>
                 <ButtonText className="font-bold text-white">+ Create</ButtonText>
               </Button>
             )}
 
             {/* --- TAB CONTENT --- */}
-            <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-              <VStack className="gap-4 pb-12">
-                
-                {activeTab === 'details' && (
-                  <VStack className="gap-4 mt-1">
-                    <VStack className="bg-zinc-800/40 p-5 rounded-2xl border border-zinc-700/50 gap-4">
-                      <VStack>
-                        <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Status</Text>
-                        <Text className={`text-lg font-bold ${eventData?.status === 'voting' ? 'text-green-400' : 'text-zinc-500'}`}>
-                          {eventData?.status === 'voting' ? 'Active Voting' : 'Closed'}
-                        </Text>
-                      </VStack>
-                      <View className="h-px bg-zinc-700/50 w-full" />
-                      <VStack>
-                        <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Time</Text>
-                        {renderDetailValue('time')}
-                      </VStack>
-                      <View className="h-px bg-zinc-700/50 w-full" />
-                      <VStack>
-                        <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Location</Text>
-                        {renderDetailValue('location')}
-                      </VStack>
-                      <View className="h-px bg-zinc-700/50 w-full" />
-                      <HStack className="justify-between items-center">
-                        <VStack>
-                          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Participants</Text>
-                          <Text className="text-zinc-50 text-lg font-semibold mt-0.5">{headcount} {headcount === 1 ? 'person' : 'people'}</Text>
-                        </VStack>
-                        <TouchableOpacity activeOpacity={0.7} onPress={() => {
-                          trackEvent('participants_modal_opened', { event_id: id as string });
-                          setIsParticipantsModalOpen(true);
-                        }} className="p-2 bg-zinc-700/50 rounded-full border border-zinc-600/50">
-                          <Eye size={20} color="#a1a1aa" />
-                        </TouchableOpacity>
-                      </HStack>
+            <View
+              className="flex-1 overflow-hidden"
+              onLayout={(event) => {
+                const nextWidth = Math.round(event.nativeEvent.layout.width);
+                if (!nextWidth || nextWidth === mobileTabWidth) return;
+                setMobileTabWidth(nextWidth);
+              }}
+              {...mobileTabPanResponder.panHandlers}
+            >
+              <Animated.View
+                className="flex-1 flex-row"
+                style={{
+                  width: (mobileTabWidth || Math.max(width - 32, 1)) * MOBILE_EVENT_TABS.length,
+                  transform: [{ translateX: mobileTabOffset }],
+                }}
+              >
+                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
+                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                    <VStack className="gap-4 pb-12">
+                      {renderDetailsTab()}
                     </VStack>
+                  </ScrollView>
+                </View>
 
-                    {isOrganizer && (
-                      <Button 
-                        size="xl" 
-                        variant="outline" 
-                        className="border-zinc-600 bg-zinc-800" 
-                        onPress={() => router.push(`/edit/${id as string}`)}
-                      >
-                        <ButtonText className="font-bold text-zinc-50">Edit Event Details</ButtonText>
-                      </Button>
-                    )}
-                  </VStack>
-                )}
+                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
+                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                    <VStack className="gap-4 pb-12">
+                      {renderActiveTab()}
+                    </VStack>
+                  </ScrollView>
+                </View>
 
-                {activeTab === 'active' && (
-                  activePolls.length === 0 ? (
-                    <EmptyState message="You're all caught up!" />
-                  ) : (
-                    activePolls.map((poll) => <PollCard key={poll.id} poll={poll} isOrganizer={isOrganizer} currentUid={currentUid} onVote={handleVote} onActionPress={setActionPoll} />)
-                  )
-                )}
-
-                {activeTab === 'answered' && (
-                  answeredPolls.length === 0 ? (
-                    <EmptyState message="No answered polls yet." />
-                  ) : (
-                    answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults isOrganizer={isOrganizer} currentUid={currentUid} onVote={handleVote} onActionPress={setActionPoll} />)
-                  )
-                )}
-
-              </VStack>
-            </ScrollView>
+                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
+                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                    <VStack className="gap-4 pb-12">
+                      {renderAnsweredTab()}
+                    </VStack>
+                  </ScrollView>
+                </View>
+              </Animated.View>
+            </View>
           </>
         ) : (
           /* --- DESKTOP VIEW --- */
@@ -715,10 +950,10 @@ export default function EventScreen() {
             <View className="flex-1">
               <HStack className="justify-between items-end mb-4 mt-1">
                 <Heading size="xl" className="text-zinc-50">Active</Heading>
-                {isOrganizer && (
+                {isOrganizer && !eventEnded && (
                   <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => {
                     trackEvent('item_create_started', { event_id: id as string });
-                    setIsModalOpen(true);
+                    openCreateModal();
                   }}>
                     <ButtonText className="font-bold text-white">+ New</ButtonText>
                   </Button>
@@ -729,7 +964,7 @@ export default function EventScreen() {
                   {activePolls.length === 0 ? (
                     <EmptyState message="You're all caught up!" />
                   ) : (
-                    activePolls.map((poll) => <PollCard key={poll.id} poll={poll} isOrganizer={isOrganizer} currentUid={currentUid} onVote={handleVote} onActionPress={setActionPoll} />)
+                    activePolls.map((poll) => <PollCard key={poll.id} poll={poll} isOrganizer={isOrganizer && !eventEnded} currentUid={currentUid} onVote={handleVote} onAddChoice={handleAddChoice} onActionPress={setActionPoll} />)
                   )}
                 </VStack>
               </ScrollView>
@@ -742,7 +977,7 @@ export default function EventScreen() {
                   {answeredPolls.length === 0 ? (
                     <EmptyState message="No answered polls yet." />
                   ) : (
-                    answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults isOrganizer={isOrganizer} currentUid={currentUid} onVote={handleVote} onActionPress={setActionPoll} />)
+                    answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults isOrganizer={isOrganizer && !eventEnded} currentUid={currentUid} onVote={handleVote} onAddChoice={handleAddChoice} onActionPress={setActionPoll} />)
                   )}
                 </VStack>
               </ScrollView>
@@ -752,7 +987,7 @@ export default function EventScreen() {
       </View>
 
       <QRModal visible={isQRModalOpen} onClose={() => setIsQRModalOpen(false)} eventData={eventData} joinLink={joinLink} />
-      <PollModal visible={isModalOpen} eventId={id as string} onClose={() => setIsModalOpen(false)} initialQuestion={modalConfig.question} initialChoices={modalConfig.choices} pollIdToEdit={modalConfig.pollIdToEdit} linkedField={modalConfig.linkedField} />
+      <PollModal visible={isModalOpen} eventId={id as string} onClose={closePollModal} initialQuestion={modalConfig.question} initialChoices={modalConfig.choices} pollIdToEdit={modalConfig.pollIdToEdit} linkedField={modalConfig.linkedField} />
       <PollActionModal 
         isOpen={!!actionPoll} 
         poll={actionPoll} 
@@ -766,7 +1001,7 @@ export default function EventScreen() {
       <ParticipantsModal
         visible={isParticipantsModalOpen}
         onClose={() => setIsParticipantsModalOpen(false)}
-        participantIds={Array.from(uniqueParticipants)}
+        participantIds={participantIds}
         roleAssignments={roleAssignments}
         organizerId={eventData?.organizerId}
         eventId={id as string}

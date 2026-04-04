@@ -9,6 +9,7 @@ import { Button, ButtonText } from '@/components/ui/button';
 import * as Clipboard from 'expo-clipboard';
 import { Eye } from 'lucide-react-native';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
+import { getEventStatusLabel, isEventEnded } from '@/utils/eventStatus';
 
 interface EventHeaderProps {
   eventData: any;
@@ -29,6 +30,7 @@ interface EventHeaderProps {
 
 export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, timeQuickPoll, locationQuickPoll, isQuickPollExpired, getQuickPollWinner, onBack, onShowQR, onOpenModal, onShowParticipants, onEditEvent }: EventHeaderProps) {
   const toast = useToast();
+  const eventEnded = isEventEnded(eventData);
 
   const renderQuickPollValue = (field: 'time' | 'location', quickPoll?: any) => {
     const currentValue = eventData?.[field];
@@ -43,6 +45,10 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
     }
 
     if (!isOrganizer) {
+      return <Text className="text-zinc-50 font-semibold">TBD</Text>;
+    }
+
+    if (eventEnded) {
       return <Text className="text-zinc-50 font-semibold">TBD</Text>;
     }
 
@@ -89,7 +95,7 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
     toast.show({
       placement: "top",
       render: ({ id: toastId }) => (
-        <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-12 px-4 py-3 rounded-xl shadow-lg">
+        <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
           <VStack>
             <ToastTitle className="text-green-400 font-bold text-sm">Copied!</ToastTitle>
             <ToastDescription className="text-zinc-300 text-xs mt-0.5">Join link copied to clipboard.</ToastDescription>
@@ -151,16 +157,18 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
           <HStack className="justify-between items-center mb-3">
             <Heading size="sm" className="text-zinc-400 uppercase tracking-wider">Event Details</Heading>
             {isOrganizer && (
-              <Button size="xs" variant="outline" className="border-zinc-600 bg-zinc-800 h-7 px-2" onPress={onEditEvent}>
-                <ButtonText className="text-zinc-300 text-xs">Edit</ButtonText>
-              </Button>
+              <HStack className="gap-2">
+                <Button size="xs" variant="outline" className="border-zinc-600 bg-zinc-800 h-7 px-2" onPress={onEditEvent}>
+                  <ButtonText className="text-zinc-300 text-xs">Edit</ButtonText>
+                </Button>
+              </HStack>
             )}
           </HStack>
           
           <VStack className="gap-3">
             <HStack className="justify-between gap-6 items-center">
               <Text className="text-zinc-400 font-medium">Status</Text>
-              <Text className="text-green-400 font-bold">{eventData?.status === 'voting' ? 'Active' : 'Closed'}</Text>
+              <Text className={`font-bold ${eventData?.status === 'voting' ? 'text-green-400' : 'text-red-300'}`}>{getEventStatusLabel(eventData)}</Text>
             </HStack>
 
             <HStack className="justify-between gap-6 items-center">
