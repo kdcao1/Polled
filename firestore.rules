@@ -29,8 +29,16 @@ service cloud.firestore {
       return exists(eventDocPath(eventId));
     }
 
+    function eventExistsAfter(eventId) {
+      return existsAfter(eventDocPath(eventId));
+    }
+
     function eventData(eventId) {
       return get(eventDocPath(eventId)).data;
+    }
+
+    function eventDataAfter(eventId) {
+      return getAfter(eventDocPath(eventId)).data;
     }
 
     function joinedEvents(uid) {
@@ -41,6 +49,10 @@ service cloud.firestore {
 
     function isEventOrganizer(eventId) {
       return eventExists(eventId) && eventData(eventId).organizerId == request.auth.uid;
+    }
+
+    function isEventOrganizerAfter(eventId) {
+      return eventExistsAfter(eventId) && eventDataAfter(eventId).organizerId == request.auth.uid;
     }
 
     function isEventMember(eventId) {
@@ -133,6 +145,7 @@ service cloud.firestore {
         allow read: if isEventMember(eventId);
         allow create: if signedIn() && (
           isEventOrganizer(eventId) ||
+          isEventOrganizerAfter(eventId) ||
           (isSelf(uid) && canJoinEvent(eventId))
         );
         allow update: if isEventOrganizer(eventId) || isSelf(uid);

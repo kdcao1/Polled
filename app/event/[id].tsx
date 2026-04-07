@@ -40,6 +40,8 @@ const EMPTY_MODAL_CONFIG: PollModalConfig = {};
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DEFAULT_AVAILABILITY_START_HOUR = 7;
+const DEFAULT_AVAILABILITY_END_HOUR = 30;
 
 const toDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -122,6 +124,22 @@ const getTopAvailabilitySlots = (poll: any, limit = 3) => {
     });
 };
 
+const getAvailabilityHourBounds = (poll: any) => {
+  const startHour =
+    typeof poll?.startHour === 'number'
+      ? Math.min(poll.startHour, DEFAULT_AVAILABILITY_START_HOUR)
+      : DEFAULT_AVAILABILITY_START_HOUR;
+  const rawEndHour =
+    typeof poll?.endHour === 'number'
+      ? poll.endHour
+      : DEFAULT_AVAILABILITY_END_HOUR;
+
+  return {
+    startHour,
+    endHour: Math.max(rawEndHour, DEFAULT_AVAILABILITY_END_HOUR),
+  };
+};
+
 interface TimeAvailabilityModalProps {
   visible: boolean;
   eventId: string;
@@ -166,8 +184,8 @@ function TimeAvailabilityModal({ visible, eventId, onClose }: TimeAvailabilityMo
         question: 'What time works best?',
         type: 'availability',
         selectedDates,
-        startHour: 8,
-        endHour: 28,
+        startHour: DEFAULT_AVAILABILITY_START_HOUR,
+        endHour: DEFAULT_AVAILABILITY_END_HOUR,
         availabilityByUser: {},
         createdAt: serverTimestamp(),
         status: 'active',
@@ -278,7 +296,12 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   const [currentDateIndex, setCurrentDateIndex] = useState(0);
   const lastDraggedSlotRef = useRef<string | null>(null);
   const mobileDragStartedRef = useRef(false);
+  const mobileDragStartIndexRef = useRef<number | null>(null);
+  const mobileDragStartPageYRef = useRef<number | null>(null);
   const dateKeys = Array.isArray(poll?.selectedDates) ? [...poll.selectedDates].sort() : [];
+  const { startHour, endHour } = getAvailabilityHourBounds(poll);
+  const currentDateKey = dateKeys[currentDateIndex];
+  const hours = Array.from({ length: Math.max(endHour - startHour, 0) }, (_, idx) => startHour + idx);
 
   useEffect(() => {
     if (!visible || !poll) return;
@@ -296,13 +319,6 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
     setCurrentDateIndex((current) => Math.min(current, dateKeys.length - 1));
   }, [dateKeys.length]);
 
-  if (!poll) return null;
-
-  const startHour = typeof poll.startHour === 'number' ? poll.startHour : 8;
-  const endHour = typeof poll.endHour === 'number' ? poll.endHour : 20;
-  const currentDateKey = dateKeys[currentDateIndex];
-  const hours = Array.from({ length: Math.max(endHour - startHour, 0) }, (_, idx) => startHour + idx);
-
   const mutateSlot = (slotKey: string, mode: 'add' | 'remove') => {
     setSelectedSlots((current) => {
       const hasSlot = current.includes(slotKey);
@@ -319,12 +335,14 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
     );
   };
 
-  const handleSlotStart = (slotKey: string) => {
+  const handleSlotStart = (slotKey: string, slotIndex?: number, pageY?: number) => {
     const nextMode = selectedSlots.includes(slotKey) ? 'remove' : 'add';
     setDragMode(nextMode);
     setIsDragging(true);
     mobileDragStartedRef.current = true;
     lastDraggedSlotRef.current = slotKey;
+    mobileDragStartIndexRef.current = slotIndex ?? null;
+    mobileDragStartPageYRef.current = pageY ?? null;
     mutateSlot(slotKey, nextMode);
   };
 
@@ -339,21 +357,39 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
     setIsDragging(false);
     lastDraggedSlotRef.current = null;
     mobileDragStartedRef.current = false;
+    mobileDragStartIndexRef.current = null;
+    mobileDragStartPageYRef.current = null;
   };
 
-  const handleMobileSlotMove = (locationY: number) => {
+  const handleMobileSlotMove = (moveY: number) => {
     if (!isDragging || !currentDateKey) return;
+    if (mobileDragStartIndexRef.current == null || mobileDragStartPageYRef.current == null) return;
 
     const step = MOBILE_SLOT_HEIGHT + MOBILE_SLOT_GAP;
-    const index = Math.floor(locationY / step);
-    if (index < 0 || index >= hours.length) return;
-
-    const offsetWithinCell = locationY - index * step;
-    if (offsetWithinCell > MOBILE_SLOT_HEIGHT) return;
+    const delta = moveY - mobileDragStartPageYRef.current;
+    const offset = Math.round(delta / step);
+    const index = Math.min(
+      Math.max(mobileDragStartIndexRef.current + offset, 0),
+      hours.length - 1
+    );
 
     const slotKey = `${currentDateKey}|${hours[index]}`;
     handleSlotEnter(slotKey);
   };
+
+  const availabilityPanResponder = useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => isDragging && Math.abs(gestureState.dy) > 2,
+      onMoveShouldSetPanResponderCapture: (_, gestureState) => isDragging && Math.abs(gestureState.dy) > 2,
+      onPanResponderMove: (_, gestureState) => handleMobileSlotMove(gestureState.moveY),
+      onPanResponderRelease: handleDragEnd,
+      onPanResponderTerminate: handleDragEnd,
+    }),
+    [isDragging, currentDateKey, hours, dragMode]
+  );
+
+  if (!poll) return null;
 
   const handleSave = async () => {
     if (!poll?.id) return;
@@ -408,10 +444,7 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
               >
                 <View
                   className="pb-1"
-                  onMoveShouldSetResponder={() => isDragging}
-                  onResponderMove={(event) => handleMobileSlotMove(event.nativeEvent.locationY)}
-                  onResponderRelease={handleDragEnd}
-                  onResponderTerminate={handleDragEnd}
+                  {...availabilityPanResponder.panHandlers}
                 >
                   {hours.map((hour, index) => {
                     const slotKey = `${currentDateKey}|${hour}`;
@@ -421,7 +454,7 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
                       <Pressable
                         key={slotKey}
                         delayLongPress={120}
-                        onLongPress={() => handleSlotStart(slotKey)}
+                        onLongPress={(event) => handleSlotStart(slotKey, index, event.nativeEvent.pageY)}
                         onPress={() => {
                           if (mobileDragStartedRef.current) {
                             mobileDragStartedRef.current = false;
@@ -429,7 +462,6 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
                           }
                           toggleSlot(slotKey);
                         }}
-                        onPressOut={handleDragEnd}
                         className={`self-center rounded-3xl border px-4 ${selected ? 'bg-emerald-600 border-emerald-500' : 'bg-zinc-800 border-zinc-700'}`}
                         style={{
                           width: MOBILE_SLOT_WIDTH,
@@ -499,34 +531,39 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
           )}
 
           {isMobilePicker ? (
-            <HStack className="items-center justify-between pt-3 gap-3">
-              <Button
-                size="lg"
-                variant="outline"
-                className="flex-1 border-zinc-700 bg-zinc-800"
-                onPress={() => setCurrentDateIndex((current) => Math.max(current - 1, 0))}
-                isDisabled={currentDateIndex === 0}
-              >
-                <ButtonText className={currentDateIndex === 0 ? 'font-bold text-zinc-600' : 'font-bold text-zinc-200'}>
-                  Back
-                </ButtonText>
-              </Button>
-              <Button
-                size="lg"
-                action="primary"
-                className="flex-1 bg-emerald-600 border-0"
-                onPress={
-                  currentDateIndex >= dateKeys.length - 1
-                    ? handleSave
-                    : () => setCurrentDateIndex((current) => Math.min(current + 1, Math.max(dateKeys.length - 1, 0)))
-                }
-                isDisabled={saving}
-              >
-                <ButtonText className="font-bold text-white">
-                  {currentDateIndex >= dateKeys.length - 1 ? 'Submit' : 'Forward'}
-                </ButtonText>
-              </Button>
-            </HStack>
+            <VStack className="pt-3 gap-2">
+              <Text className="text-center text-zinc-500 text-xs">
+                Hold and drag to select multiple
+              </Text>
+              <HStack className="items-center justify-between gap-3">
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="flex-1 border-zinc-700 bg-zinc-800"
+                  onPress={() => setCurrentDateIndex((current) => Math.max(current - 1, 0))}
+                  isDisabled={currentDateIndex === 0}
+                >
+                  <ButtonText className={currentDateIndex === 0 ? 'font-bold text-zinc-600' : 'font-bold text-zinc-200'}>
+                    Back
+                  </ButtonText>
+                </Button>
+                <Button
+                  size="lg"
+                  action="primary"
+                  className="flex-1 bg-emerald-600 border-0"
+                  onPress={
+                    currentDateIndex >= dateKeys.length - 1
+                      ? handleSave
+                      : () => setCurrentDateIndex((current) => Math.min(current + 1, Math.max(dateKeys.length - 1, 0)))
+                  }
+                  isDisabled={saving}
+                >
+                  <ButtonText className="font-bold text-white">
+                    {currentDateIndex >= dateKeys.length - 1 ? 'Submit' : 'Forward'}
+                  </ButtonText>
+                </Button>
+              </HStack>
+            </VStack>
           ) : (
             <HStack className="items-center justify-center mt-4">
               <Button size="lg" action="primary" className="bg-emerald-600 border-0 self-center" onPress={handleSave} isDisabled={saving}>
@@ -568,8 +605,7 @@ function AvailabilityPollCard({
     Array.isArray(poll.availabilityByUser?.[uid]) && poll.availabilityByUser[uid].length > 0
   ).length;
   const topSlots = getTopAvailabilitySlots(poll, 3);
-  const startHour = typeof poll.startHour === 'number' ? poll.startHour : 8;
-  const endHour = typeof poll.endHour === 'number' ? poll.endHour : 20;
+  const { startHour, endHour } = getAvailabilityHourBounds(poll);
   const shouldShowGrid = !showResults && (currentSelections.length > 0 || eventEnded);
 
   return (
