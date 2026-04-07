@@ -37,6 +37,7 @@ const formatTimeLeft = (expirationDate: Date) => {
 export default function PollCard({ poll, compact = false, isOrganizer = false, showResults = false, currentUid, onVote, onAddChoice, onActionPress }: PollCardProps) {
   const itemType = getEventItemType(poll);
   const isRole = itemType === 'role';
+  const options = Array.isArray(poll?.options) ? poll.options : [];
   const totalVotes = getResponseCount(poll);
   const expiresAtDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : (poll.expiresAt ? new Date(poll.expiresAt) : null);
 
@@ -62,14 +63,14 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
   const [isSubmittingChoice, setIsSubmittingChoice] = useState(false);
 
   useEffect(() => {
-    if (!isEditingMultiple && poll?.options && currentUid && !isRole) {
+    if (!isEditingMultiple && currentUid && !isRole) {
       setLocalSelections(
-        poll.options
+        options
           .map((o: any, i: number) => (o.voterIds.includes(currentUid) ? i : -1))
           .filter((i: number) => i !== -1)
       );
     }
-  }, [poll, currentUid, isEditingMultiple, isRole]);
+  }, [options, currentUid, isEditingMultiple, isRole]);
 
   useEffect(() => {
     if (!expiresAtDate || isExpired || poll.endCondition === 'vote_count' || isRole) return;
@@ -119,14 +120,14 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
     };
   }, [isExpired, totalVotes, pulseAnim, isRole]);
 
-  const roleSelection = poll.options?.[0];
+  const roleSelection = options[0];
   const roleCount = roleSelection?.voterIds?.length ?? 0;
   const roleIsSelected = !!currentUid && !!roleSelection?.voterIds?.includes(currentUid);
   const roleIsFull = isRoleItemFull(poll);
   const roleRemaining = poll.slotLimit != null ? Math.max(poll.slotLimit - roleCount, 0) : null;
 
-  const maxVotes = !isRole ? Math.max(0, ...poll.options.map((o: any) => o.voterIds.length)) : 0;
-  const winners = !isRole ? poll.options.filter((o: any) => o.voterIds.length === maxVotes && maxVotes > 0) : [];
+  const maxVotes = !isRole ? Math.max(0, ...options.map((o: any) => o.voterIds.length)) : 0;
+  const winners = !isRole ? options.filter((o: any) => o.voterIds.length === maxVotes && maxVotes > 0) : [];
   const canInviteesAddChoices = !isRole && !!poll.allowInviteeChoices && !isOrganizer && !displayResults && !isExpired && !!onAddChoice;
 
   const renderTag = (label: string, colors: { backgroundColor: string; borderColor: string; textColor: string }) => (
@@ -223,7 +224,7 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
               variant={roleIsSelected ? 'outline' : 'solid'}
               className={roleIsSelected ? 'border-zinc-600 bg-zinc-800' : 'bg-blue-600 border-0'}
               isDisabled={roleIsFull && !roleIsSelected}
-              onPress={() => onVote(poll.id, 0, poll.options, false)}
+              onPress={() => onVote(poll.id, 0, options, false)}
             >
               <ButtonText className={roleIsSelected ? 'text-zinc-100 font-bold' : 'text-white font-bold'}>
                 {roleActionLabel}
@@ -325,7 +326,7 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
               </HStack>
             </View>
           ) : (
-            poll.options.map((option: any, index: number) => {
+            options.map((option: any, index: number) => {
               const isSelected = poll.allowMultiple
                 ? localSelections.includes(index)
                 : option.voterIds.includes(currentUid);
@@ -342,7 +343,7 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
                       setIsEditingMultiple(true);
                       setLocalSelections((prev) => prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]);
                     } else {
-                      onVote(poll.id, index, poll.options, poll.allowMultiple);
+                      onVote(poll.id, index, options, poll.allowMultiple);
                     }
                   }}
                   className={`rounded-lg border overflow-hidden relative ${compact ? 'p-3' : 'p-4'} ${isSelected ? 'bg-blue-900/40 border-blue-500' : 'bg-zinc-900/50 border-zinc-700'}`}
@@ -373,7 +374,7 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
             onPress={() => {
               setIsEditingMultiple(false);
               setLocalSelections(
-                poll.options
+                options
                   .map((o: any, i: number) => (o.voterIds.includes(currentUid) ? i : -1))
                   .filter((i: number) => i !== -1)
               );
@@ -387,7 +388,7 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
             className="bg-blue-600 border-0"
             onPress={() => {
               setIsEditingMultiple(false);
-              onVote(poll.id, localSelections, poll.options, poll.allowMultiple);
+              onVote(poll.id, localSelections, options, poll.allowMultiple);
             }}
           >
             <ButtonText className="font-bold text-white">Confirm Votes</ButtonText>

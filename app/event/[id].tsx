@@ -313,10 +313,11 @@ export default function EventScreen() {
     polls.find((poll) => getEventItemType(poll) === 'poll' && poll.linkedField === field);
 
   const getWinningOption = (poll: any) => {
-    if (!poll?.options?.length) return null;
-    const maxVotes = Math.max(...poll.options.map((option: any) => option.voterIds.length));
+    const options = Array.isArray(poll?.options) ? poll.options : [];
+    if (!options.length) return null;
+    const maxVotes = Math.max(...options.map((option: any) => option.voterIds.length));
     if (maxVotes <= 0) return null;
-    const winners = poll.options.filter((option: any) => option.voterIds.length === maxVotes);
+    const winners = options.filter((option: any) => option.voterIds.length === maxVotes);
     return winners.length === 1 ? winners[0] : null;
   };
 
@@ -432,10 +433,15 @@ export default function EventScreen() {
           throw new Error("EXPIRED");
         }
 
-        let newOptions = pollData.options.map((opt: any) => ({ 
+        const existingOptions = Array.isArray(pollData.options) ? pollData.options : [];
+        let newOptions = existingOptions.map((opt: any) => ({ 
           ...opt, 
           voterIds: [...opt.voterIds] 
         }));
+
+        if (newOptions.length === 0) {
+          throw new Error('INVALID_OPTIONS');
+        }
         
         if (allowMultipleVotes && Array.isArray(selectedIndices)) {
           newOptions.forEach((opt: any) => opt.voterIds = opt.voterIds.filter((v: string) => v !== uid));
@@ -487,6 +493,18 @@ export default function EventScreen() {
               <VStack>
                 <ToastTitle className="text-red-400 font-bold text-sm">Poll Ended</ToastTitle>
                 <ToastDescription className="text-zinc-300 text-xs mt-0.5">This poll is no longer accepting votes.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      } else if (error.message === 'INVALID_OPTIONS') {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-red-400 font-bold text-sm">Poll Unavailable</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">This poll is missing options and cannot accept votes right now.</ToastDescription>
               </VStack>
             </Toast>
           ),

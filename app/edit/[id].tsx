@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native';
+import { KeyboardAvoidingView, Platform, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -267,37 +267,37 @@ export default function EditEventScreen() {
             <VStack className="gap-3">
               <Text className="text-zinc-300 font-medium ml-1">Who Can Vote?</Text>
 
-              <Button
-                variant="outline"
-                className={`justify-start border ${identityRequirement === 'none' ? 'border-blue-500 bg-blue-600/10' : 'border-zinc-700 bg-zinc-800'}`}
+              <TouchableOpacity
+                activeOpacity={0.85}
+                className={`rounded-2xl border p-4 ${identityRequirement === 'none' ? 'border-blue-500 bg-blue-600/10' : 'border-zinc-700 bg-zinc-800'}`}
                 onPress={() => setIdentityRequirement('none')}
-                isDisabled={isSaving || isEnding}
+                disabled={isSaving || isEnding}
               >
-                <VStack className="items-start py-1">
-                  <ButtonText className={`${identityRequirement === 'none' ? 'text-blue-300' : 'text-zinc-50'} font-bold`}>
+                <VStack className="gap-1.5">
+                  <Text className={`${identityRequirement === 'none' ? 'text-blue-300' : 'text-zinc-50'} font-bold text-base`}>
                     Open to onboarded users
-                  </ButtonText>
-                  <Text className="text-zinc-400 text-xs mt-1">
+                  </Text>
+                  <Text className="text-zinc-400 text-sm leading-5">
                     Anyone who joins and sets a name can participate.
                   </Text>
                 </VStack>
-              </Button>
+              </TouchableOpacity>
 
-              <Button
-                variant="outline"
-                className={`justify-start border ${identityRequirement === 'linked_account' ? 'border-amber-500 bg-amber-500/10' : 'border-zinc-700 bg-zinc-800'}`}
+              <TouchableOpacity
+                activeOpacity={0.85}
+                className={`rounded-2xl border p-4 ${identityRequirement === 'linked_account' ? 'border-amber-500 bg-amber-500/10' : 'border-zinc-700 bg-zinc-800'}`}
                 onPress={() => setIdentityRequirement('linked_account')}
-                isDisabled={isSaving || isEnding}
+                disabled={isSaving || isEnding}
               >
-                <VStack className="items-start py-1">
-                  <ButtonText className={`${identityRequirement === 'linked_account' ? 'text-amber-300' : 'text-zinc-50'} font-bold`}>
+                <VStack className="gap-1.5">
+                  <Text className={`${identityRequirement === 'linked_account' ? 'text-amber-300' : 'text-zinc-50'} font-bold text-base`}>
                     Require linked account
-                  </ButtonText>
-                  <Text className="text-zinc-400 text-xs mt-1">
+                  </Text>
+                  <Text className="text-zinc-400 text-sm leading-5">
                     Participants must link Google or email before joining and voting.
                   </Text>
                 </VStack>
-              </Button>
+              </TouchableOpacity>
             </VStack>
 
             {!isLoading && eventStatus !== 'ended' && (
