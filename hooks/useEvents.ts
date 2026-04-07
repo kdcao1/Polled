@@ -68,6 +68,7 @@ export const useEvents = () => {
 
       batch.set(joinCodeRef, {
         eventId: secureEventId,
+        identityRequirement: 'none',
         createdAt: serverTimestamp(),
       });
 

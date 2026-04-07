@@ -117,6 +117,7 @@ export default function EditEventScreen() {
       }
 
       await updateDoc(docRef, updatePayload);
+
       trackEvent('event_updated', {
         event_id: id as string,
         has_time: !!time.trim(),

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Pressable, ScrollView, ActivityIndicator } from 'react-native';
+import { Modal, View, Pressable, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
@@ -138,7 +138,7 @@ export default function ParticipantsModal({ visible, onClose, participantIds, ro
                     >
                       <VStack className="flex-1 gap-2">
                         <HStack className="items-center justify-between gap-3">
-                          <Text className="text-zinc-100 font-medium flex-1" numberOfLines={1}>
+                          <Text className="text-zinc-100 font-medium flex-1" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
                             {participant.name}
                           </Text>
                           <HStack className="items-center justify-end gap-2 shrink-0">
@@ -206,7 +206,7 @@ export default function ParticipantsModal({ visible, onClose, participantIds, ro
                                 <Text
                                   className="text-[10px] font-bold uppercase tracking-wider"
                                   style={{ color: '#fde68a' }}
-                                  numberOfLines={1}
+                                  {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}
                                 >
                                   {roleName}
                                 </Text>

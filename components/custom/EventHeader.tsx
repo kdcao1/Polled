@@ -17,18 +17,19 @@ interface EventHeaderProps {
   isMobile: boolean;
   isOrganizer: boolean;
   joinLink: string;
+  timeAvailabilityPoll?: any;
   timeQuickPoll?: any;
   locationQuickPoll?: any;
   isQuickPollExpired: (poll: any) => boolean;
   getQuickPollWinner: (poll: any) => any;
   onBack: () => void;
   onShowQR: () => void;
-  onOpenModal: (question: string, linkedField?: 'time' | 'location') => void;
+  onOpenLinkedPoll: (field: 'time' | 'location') => void;
   onShowParticipants: () => void;
   onEditEvent: () => void;
 }
 
-export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, timeQuickPoll, locationQuickPoll, isQuickPollExpired, getQuickPollWinner, onBack, onShowQR, onOpenModal, onShowParticipants, onEditEvent }: EventHeaderProps) {
+export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, timeAvailabilityPoll, timeQuickPoll, locationQuickPoll, isQuickPollExpired, getQuickPollWinner, onBack, onShowQR, onOpenLinkedPoll, onShowParticipants, onEditEvent }: EventHeaderProps) {
   const toast = useToast();
   const eventEnded = isEventEnded(eventData);
 
@@ -52,6 +53,14 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
       return <Text className="text-zinc-50 font-semibold">TBD</Text>;
     }
 
+    if (field === 'time' && timeAvailabilityPoll) {
+      return (
+        <Text className="text-emerald-400 font-semibold text-right max-w-[160px]" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
+          Currently polling
+        </Text>
+      );
+    }
+
     if (quickPoll && !isQuickPollExpired(quickPoll)) {
       return (
         <Text className="text-blue-400 font-semibold text-right max-w-[160px]" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
@@ -70,9 +79,9 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
           size="xs"
           variant="outline"
           className="border-zinc-600 bg-zinc-800 h-7 px-2"
-          onPress={() => onOpenModal(field === 'time' ? 'What time?' : 'Where we going?', field)}
+          onPress={() => onOpenLinkedPoll(field)}
         >
-          <ButtonText className="text-zinc-300 text-xs">Rerun Poll</ButtonText>
+          <ButtonText className="text-zinc-300 text-xs">{field === 'time' ? 'Poll Time' : 'Rerun Poll'}</ButtonText>
         </Button>
       );
     }
@@ -82,7 +91,7 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
         size="xs"
         variant="outline"
         className="border-zinc-600 bg-zinc-800 h-7 px-2"
-        onPress={() => onOpenModal(field === 'time' ? 'What time?' : 'Where we going?', field)}
+        onPress={() => onOpenLinkedPoll(field)}
       >
         <ButtonText className="text-zinc-300 text-xs">{field === 'time' ? 'Poll Time' : 'Poll Location'}</ButtonText>
       </Button>
