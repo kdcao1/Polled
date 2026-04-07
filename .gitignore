@@ -39,3 +39,4 @@ server/notification-worker/node_modules/
 # typescript
 *.tsbuildinfo
 Polled.code-workspace
+google-services.json
