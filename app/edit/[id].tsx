@@ -23,6 +23,7 @@ export default function EditEventScreen() {
   const [title, setTitle] = useState('');
   const [time, setTime] = useState('');
   const [location, setLocation] = useState('');
+  const [identityRequirement, setIdentityRequirement] = useState<'none' | 'linked_account'>('none');
   const [eventStatus, setEventStatus] = useState<'voting' | 'ended'>('voting');
   
   const [isLoading, setIsLoading] = useState(true);
@@ -72,6 +73,7 @@ export default function EditEventScreen() {
           setTitle(data.title || '');
           setTime(data.time || '');
           setLocation(data.location || '');
+          setIdentityRequirement(data.identityRequirement === 'linked_account' ? 'linked_account' : 'none');
           setEventStatus(data.status === 'ended' ? 'ended' : 'voting');
         } else {
           showToast('Not Found', 'This event no longer exists.', 'error');
@@ -101,6 +103,7 @@ export default function EditEventScreen() {
         title: title.trim(),
         time: time.trim(),
         location: location.trim(),
+        identityRequirement,
         scheduledAt: scheduledDate ? scheduledDate.toISOString() : null,
         status: nextStatus,
       };
@@ -118,6 +121,7 @@ export default function EditEventScreen() {
         event_id: id as string,
         has_time: !!time.trim(),
         has_location: !!location.trim(),
+        identity_requirement: identityRequirement,
         status: nextStatus,
       });
 
@@ -258,6 +262,42 @@ export default function EditEventScreen() {
                   className="text-zinc-50"
                 />
               </Input>
+            </VStack>
+
+            <VStack className="gap-3">
+              <Text className="text-zinc-300 font-medium ml-1">Who Can Vote?</Text>
+
+              <Button
+                variant="outline"
+                className={`justify-start border ${identityRequirement === 'none' ? 'border-blue-500 bg-blue-600/10' : 'border-zinc-700 bg-zinc-800'}`}
+                onPress={() => setIdentityRequirement('none')}
+                isDisabled={isSaving || isEnding}
+              >
+                <VStack className="items-start py-1">
+                  <ButtonText className={`${identityRequirement === 'none' ? 'text-blue-300' : 'text-zinc-50'} font-bold`}>
+                    Open to onboarded users
+                  </ButtonText>
+                  <Text className="text-zinc-400 text-xs mt-1">
+                    Anyone who joins and sets a name can participate.
+                  </Text>
+                </VStack>
+              </Button>
+
+              <Button
+                variant="outline"
+                className={`justify-start border ${identityRequirement === 'linked_account' ? 'border-amber-500 bg-amber-500/10' : 'border-zinc-700 bg-zinc-800'}`}
+                onPress={() => setIdentityRequirement('linked_account')}
+                isDisabled={isSaving || isEnding}
+              >
+                <VStack className="items-start py-1">
+                  <ButtonText className={`${identityRequirement === 'linked_account' ? 'text-amber-300' : 'text-zinc-50'} font-bold`}>
+                    Require linked account
+                  </ButtonText>
+                  <Text className="text-zinc-400 text-xs mt-1">
+                    Participants must link Google or email before joining and voting.
+                  </Text>
+                </VStack>
+              </Button>
             </VStack>
 
             {!isLoading && eventStatus !== 'ended' && (

@@ -39,6 +39,25 @@ export default function JoinScreen() {
       }
 
       const secureEventId = joinCodeDoc.data().eventId as string;
+      const eventDoc = await getDoc(doc(db, 'events', secureEventId));
+
+      if (!eventDoc.exists()) {
+        trackEvent('event_join_failed', { reason: 'event_not_found' });
+        setErrorMsg("That invite is no longer active.");
+        setIsJoining(false);
+        return;
+      }
+
+      const identityRequirement = eventDoc.data().identityRequirement === 'linked_account'
+        ? 'linked_account'
+        : 'none';
+
+      if (identityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
+        trackEvent('event_join_failed', { reason: 'linked_account_required' });
+        setIsJoining(false);
+        router.replace(`/link-account?next=${encodeURIComponent(`/join?code=${code}`)}`);
+        return;
+      }
 
       // 3. Add this event to the user's dashboard array
       const userRef = doc(db, 'users', auth.currentUser.uid);

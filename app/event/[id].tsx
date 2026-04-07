@@ -377,6 +377,21 @@ export default function EventScreen() {
   const handleVote = async (pollId: string, selectedIndices: number | number[], currentOptions: any[], allowMultipleVotes: boolean) => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
+    if (eventData?.identityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-amber-400 font-bold text-sm">Linked Account Required</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Link Google or email before voting in this event.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}`);
+      return;
+    }
     if (eventEnded) {
       toast.show({
         placement: "top",

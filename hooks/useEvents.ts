@@ -46,6 +46,7 @@ export const useEvents = () => {
         title: title,
         joinCode: newJoinCode, 
         organizerId: currentUser.uid,
+        identityRequirement: 'none',
         createdAt: serverTimestamp(),
         status: 'voting',
         time: '',

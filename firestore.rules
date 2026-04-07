@@ -21,8 +21,16 @@ service cloud.firestore {
       return exists(userDocPath(uid));
     }
 
+    function isAnonymous() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider == "anonymous";
+    }
+
     function eventExists(eventId) {
       return exists(eventDocPath(eventId));
+    }
+
+    function eventData(eventId) {
+      return get(eventDocPath(eventId)).data;
     }
 
     function joinedEvents(uid) {
@@ -32,7 +40,7 @@ service cloud.firestore {
     }
 
     function isEventOrganizer(eventId) {
-      return eventExists(eventId) && get(eventDocPath(eventId)).data.organizerId == request.auth.uid;
+      return eventExists(eventId) && eventData(eventId).organizerId == request.auth.uid;
     }
 
     function isEventMember(eventId) {
@@ -40,6 +48,18 @@ service cloud.firestore {
         isEventOrganizer(eventId) ||
         eventId in joinedEvents(request.auth.uid)
       );
+    }
+
+    function requiresLinkedAccount(eventId) {
+      return eventExists(eventId) && eventData(eventId).identityRequirement == "linked_account";
+    }
+
+    function canJoinEvent(eventId) {
+      return !requiresLinkedAccount(eventId) || !isAnonymous();
+    }
+
+    function canVoteInEvent(eventId) {
+      return isEventOrganizer(eventId) || !requiresLinkedAccount(eventId) || !isAnonymous();
     }
 
     match /users/{uid} {
@@ -54,7 +74,7 @@ service cloud.firestore {
     }
 
     match /joinCodes/{code} {
-      allow read: if signedIn();
+      allow read: if signedIn() && eventExists(resource.data.eventId) && canJoinEvent(resource.data.eventId);
       allow create: if signedIn();
       allow delete: if signedIn();
       allow update: if false;
@@ -83,7 +103,7 @@ service cloud.firestore {
         allow read: if isEventMember(eventId);
         allow create: if signedIn() && (
           isEventOrganizer(eventId) ||
-          isSelf(uid)
+          (isSelf(uid) && canJoinEvent(eventId))
         );
         allow update: if isEventOrganizer(eventId) || isSelf(uid);
         allow delete: if isEventOrganizer(eventId) || isSelf(uid);
@@ -92,7 +112,7 @@ service cloud.firestore {
       match /polls/{pollId} {
         allow read: if isEventMember(eventId);
         allow create, delete: if isEventOrganizer(eventId);
-        allow update: if isEventOrganizer(eventId) || isEventMember(eventId);
+        allow update: if isEventOrganizer(eventId) || (isEventMember(eventId) && canVoteInEvent(eventId));
       }
     }
 

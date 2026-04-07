@@ -8,7 +8,7 @@ import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText, ButtonSpinner } from '@/components/ui/button';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { EmailAuthProvider, GoogleAuthProvider, linkWithCredential } from 'firebase/auth';
 import { auth } from '../config/firebaseConfig';
 import * as Google from 'expo-auth-session/providers/google';
@@ -17,6 +17,7 @@ import { googleAuthConfig, hasGoogleAuthConfig } from '@/config/env';
 
 export default function LinkAccountScreen() {
   const router = useRouter();
+  const { next } = useLocalSearchParams();
   const user = auth.currentUser;
   const toast = useToast();
 
@@ -68,7 +69,11 @@ export default function LinkAccountScreen() {
       trackEvent('account_linked', { method: 'google' });
       
       showToast('Account Secured!', 'Your account is now linked to Google.', 'success');
-      router.back();
+      if (typeof next === 'string') {
+        router.replace(next as any);
+      } else {
+        router.back();
+      }
 
     } catch (error: any) {
       console.error('Error linking Google account:', error);
@@ -95,7 +100,11 @@ export default function LinkAccountScreen() {
       trackEvent('account_linked', { method: 'email' });
       
       showToast('Account Secured!', 'Your email and password have been saved.', 'success');
-      router.back();
+      if (typeof next === 'string') {
+        router.replace(next as any);
+      } else {
+        router.back();
+      }
 
     } catch (error: any) {
       console.error('Error linking email:', error);
