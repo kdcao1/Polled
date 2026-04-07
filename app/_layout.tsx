@@ -55,7 +55,7 @@ export default function RootLayout() {
         const inIndexScreen = pathname === '/'; 
         const inOnboardingScreen = pathname === '/onboarding';
         const inLoginScreen = pathname === '/login';
-        const isPublicRoute = inIndexScreen || inLoginScreen;
+        const isPublicRoute = inIndexScreen || inLoginScreen || inOnboardingScreen;
         
         const isIntentionalAction = 
           pathname === '/create' || 
@@ -64,7 +64,9 @@ export default function RootLayout() {
 
         // 2. IF COMPLETELY LOGGED OUT
         if (!user) {
-          if (!isPublicRoute) {
+          if (isIntentionalAction) {
+            router.replace(`/onboarding?next=${encodedPath}`);
+          } else if (!isPublicRoute) {
             router.replace(`/?next=${encodedPath}`);
           }
           return; // The finally block will still run!
@@ -73,15 +75,13 @@ export default function RootLayout() {
         // 3. IF LOGGED IN (Check for Profile)
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         const hasName = userDoc.exists() && userDoc.data().displayName;
-        const isAnonymousUser = user.isAnonymous;
 
         if (hasName) {
           if (isPublicRoute || inOnboardingScreen) {
             router.replace('/dashboard');
           }
         } else {
-          // Let anonymous / not-yet-onboarded users stay on the landing and login screens.
-          if (isIntentionalAction || (!isAnonymousUser && !isPublicRoute && !inOnboardingScreen)) {
+          if (!isPublicRoute) {
             router.replace(`/onboarding?next=${encodedPath}`);
           }
         }

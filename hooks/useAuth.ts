@@ -2,25 +2,23 @@ import { useState, useEffect } from 'react';
 import { signInAnonymously, onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '../config/firebaseConfig';
 
+export const ensureAnonymousUser = async () => {
+  if (auth.currentUser) {
+    return auth.currentUser;
+  }
+
+  const userCredential = await signInAnonymously(auth);
+  return userCredential.user;
+};
+
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-        setIsLoading(false);
-      } else {
-        try {
-          const userCredential = await signInAnonymously(auth);
-          setUser(userCredential.user);
-        } catch (error) {
-          console.error("Error signing in anonymously:", error);
-        } finally {
-          setIsLoading(false);
-        }
-      }
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsLoading(false);
     });
 
     return () => unsubscribe();

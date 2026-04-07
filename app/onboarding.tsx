@@ -8,8 +8,9 @@ import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { doc, setDoc } from 'firebase/firestore';
-import { db, auth } from '../config/firebaseConfig';
+import { db } from '../config/firebaseConfig';
 import { trackEvent } from '@/utils/analytics';
+import { ensureAnonymousUser } from '@/hooks/useAuth';
 
 export default function OnboardingScreen() {
   const [name, setName] = useState('');
@@ -18,16 +19,17 @@ export default function OnboardingScreen() {
   const { next } = useLocalSearchParams();
 
   const handleSaveName = async () => {
-    if (!name.trim() || !auth.currentUser) return;
+    if (!name.trim()) return;
     
     setIsSaving(true);
     try {
-      const userRef = doc(db, 'users', auth.currentUser.uid);
+      const currentUser = await ensureAnonymousUser();
+      const userRef = doc(db, 'users', currentUser.uid);
       await setDoc(userRef, {
         displayName: name.trim(),
         joinedEvents: [] 
       }, { merge: true });
-      await setDoc(doc(db, 'profiles', auth.currentUser.uid), {
+      await setDoc(doc(db, 'profiles', currentUser.uid), {
         displayName: name.trim(),
       }, { merge: true });
 
@@ -43,6 +45,7 @@ export default function OnboardingScreen() {
 
     } catch (error) {
       console.error("Error saving name:", error);
+    } finally {
       setIsSaving(false);
     }
   };
