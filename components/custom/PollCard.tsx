@@ -20,6 +20,8 @@ interface PollCardProps {
   onActionPress?: (poll: any) => void;
 }
 
+const EMPTY_OPTIONS: any[] = [];
+
 const formatTimeLeft = (expirationDate: Date) => {
   const diffMs = expirationDate.getTime() - new Date().getTime();
   if (diffMs <= 0) return 'Ended';
@@ -37,7 +39,7 @@ const formatTimeLeft = (expirationDate: Date) => {
 export default function PollCard({ poll, compact = false, isOrganizer = false, showResults = false, currentUid, onVote, onAddChoice, onActionPress }: PollCardProps) {
   const itemType = getEventItemType(poll);
   const isRole = itemType === 'role';
-  const options = Array.isArray(poll?.options) ? poll.options : [];
+  const options = Array.isArray(poll?.options) ? poll.options : EMPTY_OPTIONS;
   const totalVotes = getResponseCount(poll);
   const expiresAtDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : (poll.expiresAt ? new Date(poll.expiresAt) : null);
 
@@ -64,11 +66,20 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
 
   useEffect(() => {
     if (!isEditingMultiple && currentUid && !isRole) {
-      setLocalSelections(
-        options
-          .map((o: any, i: number) => (o.voterIds.includes(currentUid) ? i : -1))
-          .filter((i: number) => i !== -1)
-      );
+      const nextSelections = options
+        .map((o: any, i: number) => (o.voterIds.includes(currentUid) ? i : -1))
+        .filter((i: number) => i !== -1);
+
+      setLocalSelections((prev) => {
+        if (
+          prev.length === nextSelections.length &&
+          prev.every((value, index) => value === nextSelections[index])
+        ) {
+          return prev;
+        }
+
+        return nextSelections;
+      });
     }
   }, [options, currentUid, isEditingMultiple, isRole]);
 
