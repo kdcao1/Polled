@@ -1,38 +1,42 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import {
-  View,
-  ScrollView,
-  Modal,
-  TouchableOpacity,
-  useWindowDimensions,
-  Pressable,
-  Share,
-  Platform,
-} from 'react-native';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
-import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import {
-  doc,
-  onSnapshot,
-  collection,
-  addDoc,
-  serverTimestamp,
-  query,
-  orderBy,
-  updateDoc,
-  deleteDoc,
-} from 'firebase/firestore';
-import { db, auth } from '../../config/firebaseConfig';
-import QRCode from 'react-native-qrcode-svg';
+import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import * as Clipboard from 'expo-clipboard';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { db, auth } from '@/config/firebaseConfig';
+import PollModal from '@/components/custom/PollModal';
+import PollCard from '@/components/custom/PollCard';
+import EventHeader from '@/components/custom/EventHeader';
+import QRModal from '@/components/custom/QRModal';
+import EmptyState from '@/components/custom/EmptyState';
+import PollActionModal from '@/components/custom/PollActionModal';
+import ParticipantsModal from '@/components/custom/ParticipantsModal';
+import { buildJoinLink } from '@/utils/inviteLinks';
+import { trackEvent } from '@/utils/analytics';
+import { getEventItemType, getRespondedUserIds, getResponseCount, isEventItemExpired } from '@/utils/eventItems';
+import { getEventStatusLabel, isEventEnded, shouldAutoEndEvent } from '@/utils/eventStatus';
+import { enqueueNotificationJob } from '@/utils/notificationJobs';
+import { doc, onSnapshot, collection, query, orderBy, addDoc, deleteDoc, runTransaction, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share, Modal, Pressable, Platform, PanResponder, Animated, Easing } from 'react-native';
+import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
 
+type LinkedField = 'time' | 'location';
+const MOBILE_EVENT_TABS = ['details', 'active', 'answered'] as const;
+type EventTab = typeof MOBILE_EVENT_TABS[number];
+
+type PollModalConfig = {
+  question?: string;
+  choices?: string[];
+  pollIdToEdit?: string;
+  linkedField?: LinkedField;
+};
+
+const EMPTY_MODAL_CONFIG: PollModalConfig = {};
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -56,10 +60,17 @@ const getMonthGrid = (baseDate: Date): Array<{ date: Date | null; key: string }>
   const totalDays = end.getDate();
   const cells: Array<{ date: Date | null; key: string }> = [];
 
-  for (let i = 0; i < startDay; i += 1) cells.push({ date: null, key: `blank-start-${i}` });
-  for (let day = 1; day <= totalDays; day += 1) {
-    cells.push({ date: new Date(baseDate.getFullYear(), baseDate.getMonth(), day), key: `day-${day}` });
+  for (let i = 0; i < startDay; i += 1) {
+    cells.push({ date: null, key: `blank-start-${i}` });
   }
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    cells.push({
+      date: new Date(baseDate.getFullYear(), baseDate.getMonth(), day),
+      key: `day-${day}`,
+    });
+  }
+
   while (cells.length % 7 !== 0) {
     cells.push({ date: null, key: `blank-end-${cells.length}` });
   }
@@ -67,8 +78,11 @@ const getMonthGrid = (baseDate: Date): Array<{ date: Date | null; key: string }>
   return cells;
 };
 
-const formatDateLabel = (dateKey: string) => fromDateKey(dateKey).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-const formatFullDateLabel = (dateKey: string) => fromDateKey(dateKey).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+const formatDateLabel = (dateKey: string) =>
+  fromDateKey(dateKey).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+const formatFullDateLabel = (dateKey: string) =>
+  fromDateKey(dateKey).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
 const formatHourLabel = (hour: number) => {
   const suffix = hour >= 12 ? 'PM' : 'AM';
@@ -76,29 +90,16 @@ const formatHourLabel = (hour: number) => {
   return `${normalized}:00 ${suffix}`;
 };
 
-const buildAvailabilitySlotKeys = (dateKeys: string[], startHour = 8, endHour = 20) => {
-  return dateKeys.flatMap((dateKey) => {
-    const slots: string[] = [];
-    for (let hour = startHour; hour < endHour; hour += 1) {
-      slots.push(`${dateKey}|${hour}`);
-    }
-    return slots;
-  });
-};
-
-const slotKeyToParts = (slotKey: string) => {
-  const [dateKey, hourString] = slotKey.split('|');
-  return { dateKey, hour: Number(hourString) };
-};
-
 const getAvailabilityCounts = (poll: any) => {
   const byUser = poll?.availabilityByUser || {};
   const counts: Record<string, number> = {};
+
   Object.values(byUser).forEach((slots) => {
     (Array.isArray(slots) ? slots : []).forEach((slotKey: string) => {
       counts[slotKey] = (counts[slotKey] || 0) + 1;
     });
   });
+
   return counts;
 };
 
@@ -110,185 +111,15 @@ const getCurrentUserAvailability = (poll: any, uid?: string | null) => {
 
 const getTopAvailabilitySlots = (poll: any, limit = 3) => {
   const counts = getAvailabilityCounts(poll);
+
   return Object.entries(counts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
-    .map(([slotKey, count]) => ({ slotKey, count, ...slotKeyToParts(slotKey) }));
+    .map(([slotKey, count]) => {
+      const [dateKey, hourString] = slotKey.split('|');
+      return { slotKey, count, dateKey, hour: Number(hourString) };
+    });
 };
-
-
-
-// ---------------------------------------------------------------------------
-// PollModal — generic poll builder for non-time polls
-// ---------------------------------------------------------------------------
-interface PollModalProps {
-  visible: boolean;
-  eventId: string;
-  onClose: () => void;
-  initialQuestion?: string;
-  initialChoices?: string[];
-}
-
-function PollModal({ visible, eventId, onClose, initialQuestion, initialChoices }: PollModalProps) {
-  const [question, setQuestion] = useState('');
-  const [choices, setChoices] = useState<string[]>(['', '']);
-  const [allowMultiple, setAllowMultiple] = useState(false);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [durationHours, setDurationHours] = useState<number>(24);
-
-  const DURATION_OPTIONS = [
-    { label: '1 Hour', value: 1 },
-    { label: '2 Hours', value: 2 },
-    { label: '6 Hours', value: 6 },
-    { label: '12 Hours', value: 12 },
-    { label: '1 Day', value: 24 },
-    { label: '2 Days', value: 48 },
-    { label: '3 Days', value: 72 },
-    { label: '1 Week', value: 168 },
-  ];
-
-  useEffect(() => {
-    if (visible) {
-      setQuestion(initialQuestion || '');
-      setChoices(initialChoices && initialChoices.length > 0 ? initialChoices : ['', '']);
-      setAllowMultiple(false);
-      setIsDropdownOpen(false);
-      setDurationHours(24);
-    }
-  }, [visible, initialQuestion, initialChoices]);
-
-  const handleClearForm = () => {
-    setQuestion('');
-    setChoices(['', '']);
-    setAllowMultiple(false);
-    setDurationHours(24);
-    setIsDropdownOpen(false);
-  };
-
-  const handleAddChoice = () => setChoices([...choices, '']);
-  const handleUpdateChoice = (text: string, index: number) => {
-    const updated = [...choices];
-    updated[index] = text;
-    setChoices(updated);
-  };
-
-  const handleCreatePoll = async () => {
-    if (!question.trim() || choices.some((c) => !c.trim())) return;
-    try {
-      const pollsRef = collection(db, 'events', eventId, 'polls');
-      const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + durationHours);
-
-      await addDoc(pollsRef, {
-        question: question.trim(),
-        allowMultiple,
-        options: choices.map((c) => ({ text: c.trim(), voterIds: [] })),
-        createdAt: serverTimestamp(),
-        status: 'active',
-        expiresAt,
-      });
-
-      handleClearForm();
-      onClose();
-    } catch (error) {
-      console.error('Error creating poll:', error);
-      alert('Something went wrong saving your poll. Try again.');
-    }
-  };
-
-  return (
-    <Modal visible={visible} animationType="fade" transparent>
-      <View className="flex-1 justify-center items-center p-4">
-        <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
-        <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-md max-h-[90%] shadow-2xl z-10">
-          <HStack className="justify-between items-center mb-6">
-            <Heading size="xl" className="text-zinc-50">Create a Poll</Heading>
-            <HStack className="gap-2">
-              <Button size="sm" variant="link" onPress={handleClearForm}><ButtonText className="text-red-400 font-semibold">Clear</ButtonText></Button>
-              <Button size="sm" variant="link" onPress={onClose}><ButtonText className="text-zinc-400">Cancel</ButtonText></Button>
-            </HStack>
-          </HStack>
-
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <VStack className="gap-6 pb-2">
-              <VStack className="gap-2">
-                <Text className="text-zinc-300 font-bold ml-1">Main Question</Text>
-                <Input variant="outline" size="xl" className="border-zinc-700">
-                  <InputField placeholder="e.g., Which place sounds best?" placeholderTextColor="#a1a1aa" className="text-zinc-50" value={question} onChangeText={setQuestion} />
-                </Input>
-              </VStack>
-
-              <HStack className="justify-between items-center bg-zinc-800 p-4 rounded-xl border border-zinc-700">
-                <Text className="text-zinc-50 font-bold">Allow Multiple Choices</Text>
-                <Switch value={allowMultiple} onValueChange={setAllowMultiple} trackColor={{ false: '#3f3f46', true: '#2563eb' }} />
-              </HStack>
-
-              <VStack className="gap-2 mt-2">
-                <Text className="text-zinc-300 font-bold ml-1">Poll Duration</Text>
-                <TouchableOpacity activeOpacity={0.7} className="bg-zinc-800 border border-zinc-700 rounded-xl p-4 flex-row justify-between items-center" onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
-                  <Text className="text-zinc-50 font-medium text-base">{DURATION_OPTIONS.find(opt => opt.value === durationHours)?.label}</Text>
-                  <Text className="text-zinc-400 text-xs">{isDropdownOpen ? '▲' : '▼'}</Text>
-                </TouchableOpacity>
-
-                {Platform.OS === 'web' && isDropdownOpen && (
-                  <View className="bg-zinc-800 border border-zinc-700 rounded-xl overflow-hidden mt-1 max-h-48">
-                    <ScrollView nestedScrollEnabled>
-                      {DURATION_OPTIONS.map((option) => (
-                        <TouchableOpacity key={option.value} className={`p-4 border-b border-zinc-700/50 ${durationHours === option.value ? 'bg-zinc-700' : ''}`} onPress={() => { setDurationHours(option.value); setIsDropdownOpen(false); }}>
-                          <Text className={`font-medium ${durationHours === option.value ? 'text-blue-400' : 'text-zinc-300'}`}>{option.label}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                )}
-              </VStack>
-
-              <VStack className="gap-3">
-                <Text className="text-zinc-300 font-bold ml-1">Choices</Text>
-                {choices.map((choice, index) => (
-                  <Input key={index} variant="outline" size="xl" className="border-zinc-700">
-                    <InputField placeholder={`Option ${index + 1}`} placeholderTextColor="#52525b" className="text-zinc-50" value={choice} onChangeText={(value) => handleUpdateChoice(value, index)} />
-                  </Input>
-                ))}
-                <Button variant="outline" action="secondary" className="border-zinc-700 border-dashed mt-2" onPress={handleAddChoice}>
-                  <ButtonText className="text-zinc-400 font-bold">+ Add Another Option</ButtonText>
-                </Button>
-              </VStack>
-
-              <Button size="xl" action="primary" className="bg-blue-600 border-0 mt-4 mb-4" onPress={handleCreatePoll} isDisabled={!question.trim() || choices.some((c) => !c.trim())}>
-                <ButtonText className="font-bold text-white">Publish Poll</ButtonText>
-              </Button>
-            </VStack>
-          </ScrollView>
-        </View>
-
-        {Platform.OS !== 'web' && isDropdownOpen && (
-          <View className="absolute top-0 bottom-0 left-0 right-0 justify-end z-50">
-            <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/70" onPress={() => setIsDropdownOpen(false)} />
-            <View className="bg-[#1c1c1e] rounded-t-[32px] pt-3 pb-10 px-4 shadow-2xl w-full max-w-md self-center">
-              <View className="w-10 h-1.5 bg-zinc-600 rounded-full self-center mb-6" />
-              <Text className="text-zinc-300 font-bold text-sm mb-3 ml-2 tracking-wide">Poll Duration</Text>
-              <View className="bg-zinc-800 rounded-2xl overflow-hidden">
-                <ScrollView className="max-h-96" showsVerticalScrollIndicator={false}>
-                  {DURATION_OPTIONS.map((option, index) => {
-                    const isSelected = durationHours === option.value;
-                    const isLast = index === DURATION_OPTIONS.length - 1;
-                    return (
-                      <TouchableOpacity key={option.value} activeOpacity={0.7} className={`flex-row justify-between items-center p-5 ${!isLast ? 'border-b border-zinc-700/50' : ''}`} onPress={() => { setDurationHours(option.value); setTimeout(() => setIsDropdownOpen(false), 200); }}>
-                        <Text className={`text-base ${isSelected ? 'text-zinc-50 font-medium' : 'text-zinc-300'}`}>{option.label}</Text>
-                        <View className={`w-6 h-6 rounded-full border-2 items-center justify-center ${isSelected ? 'border-indigo-500' : 'border-zinc-500'}`}>{isSelected && <View className="w-3 h-3 rounded-full bg-indigo-500" />}</View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            </View>
-          </View>
-        )}
-      </View>
-    </Modal>
-  );
-}
 
 interface TimeAvailabilityModalProps {
   visible: boolean;
@@ -303,20 +134,25 @@ function TimeAvailabilityModal({ visible, eventId, onClose }: TimeAvailabilityMo
   const todayKey = toDateKey(new Date());
 
   useEffect(() => {
-    if (visible) {
-      setCalendarMonth(new Date());
-      setSelectedDates([]);
-    }
+    if (!visible) return;
+    setCalendarMonth(new Date());
+    setSelectedDates([]);
   }, [visible]);
 
   const toggleDate = (date: Date) => {
     const key = toDateKey(date);
     if (key < todayKey) return;
-    setSelectedDates((current) => current.includes(key) ? current.filter((value) => value !== key) : [...current, key].sort());
+
+    setSelectedDates((current) =>
+      current.includes(key)
+        ? current.filter((value) => value !== key)
+        : [...current, key].sort()
+    );
   };
 
   const handleCreateAvailabilityPoll = async () => {
     if (selectedDates.length === 0) return;
+
     try {
       await addDoc(collection(db, 'events', eventId, 'polls'), {
         question: 'What time works best?',
@@ -331,7 +167,6 @@ function TimeAvailabilityModal({ visible, eventId, onClose }: TimeAvailabilityMo
       onClose();
     } catch (error) {
       console.error('Error creating availability poll:', error);
-      alert('Unable to create the availability calendar right now.');
     }
   };
 
@@ -341,31 +176,45 @@ function TimeAvailabilityModal({ visible, eventId, onClose }: TimeAvailabilityMo
         <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
         <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-xl max-h-[90%] shadow-2xl z-10">
           <HStack className="justify-between items-center mb-4">
-            <VStack>
+            <VStack className="flex-1">
               <Heading size="xl" className="text-zinc-50">Select candidate dates</Heading>
-              <Text className="text-zinc-400 mt-1">Choose the dates attendees should fill in, then they’ll drag over their available hours.</Text>
+              <Text className="text-zinc-400 mt-1">
+                Choose the dates attendees should fill in, then they can mark available hours.
+              </Text>
             </VStack>
-            <Button size="sm" variant="link" onPress={onClose}><ButtonText className="text-zinc-400">Cancel</ButtonText></Button>
+            <Button size="sm" variant="link" onPress={onClose}>
+              <ButtonText className="text-zinc-400">Cancel</ButtonText>
+            </Button>
           </HStack>
 
           <HStack className="items-center justify-between mb-4 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 py-3">
-            <TouchableOpacity onPress={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}><Text className="text-blue-400 font-semibold">← Prev</Text></TouchableOpacity>
-            <Text className="text-zinc-50 font-bold text-lg">{MONTH_NAMES[calendarMonth.getMonth()]} {calendarMonth.getFullYear()}</Text>
-            <TouchableOpacity onPress={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}><Text className="text-blue-400 font-semibold">Next →</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}>
+              <Text className="text-blue-400 font-semibold">Prev</Text>
+            </TouchableOpacity>
+            <Text className="text-zinc-50 font-bold text-lg">
+              {MONTH_NAMES[calendarMonth.getMonth()]} {calendarMonth.getFullYear()}
+            </Text>
+            <TouchableOpacity onPress={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}>
+              <Text className="text-blue-400 font-semibold">Next</Text>
+            </TouchableOpacity>
           </HStack>
 
           <VStack className="gap-2">
             <HStack className="gap-2">
               {WEEKDAY_LABELS.map((label) => (
-                <View key={label} className="flex-1 items-center py-2"><Text className="text-zinc-500 text-xs font-bold uppercase">{label}</Text></View>
+                <View key={label} className="flex-1 items-center py-2">
+                  <Text className="text-zinc-500 text-xs font-bold uppercase">{label}</Text>
+                </View>
               ))}
             </HStack>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {monthCells.map((cell) => {
                 if (!cell.date) return <View key={cell.key} style={{ width: '13.4%', aspectRatio: 1 }} />;
+
                 const dateKey = toDateKey(cell.date);
                 const disabled = dateKey < todayKey;
                 const selected = selectedDates.includes(dateKey);
+
                 return (
                   <TouchableOpacity
                     key={cell.key}
@@ -375,7 +224,9 @@ function TimeAvailabilityModal({ visible, eventId, onClose }: TimeAvailabilityMo
                     style={{ width: '13.4%', aspectRatio: 1 }}
                     className={`rounded-2xl border items-center justify-center ${selected ? 'bg-blue-600 border-blue-500' : 'bg-zinc-800 border-zinc-700'} ${disabled ? 'opacity-30' : ''}`}
                   >
-                    <Text className={`font-semibold ${selected ? 'text-white' : 'text-zinc-200'}`}>{cell.date.getDate()}</Text>
+                    <Text className={`font-semibold ${selected ? 'text-white' : 'text-zinc-200'}`}>
+                      {cell.date.getDate()}
+                    </Text>
                   </TouchableOpacity>
                 );
               })}
@@ -388,12 +239,18 @@ function TimeAvailabilityModal({ visible, eventId, onClose }: TimeAvailabilityMo
               {selectedDates.length === 0 ? (
                 <Text className="text-zinc-500">Tap dates on the calendar above.</Text>
               ) : (
-                <Text className="text-zinc-200">{selectedDates.map(formatFullDateLabel).join(' • ')}</Text>
+                <Text className="text-zinc-200">{selectedDates.map(formatFullDateLabel).join(', ')}</Text>
               )}
             </View>
           </VStack>
 
-          <Button size="xl" action="primary" className="bg-blue-600 border-0 mt-6" onPress={handleCreateAvailabilityPoll} isDisabled={selectedDates.length === 0}>
+          <Button
+            size="xl"
+            action="primary"
+            className="bg-blue-600 border-0 mt-6"
+            onPress={handleCreateAvailabilityPoll}
+            isDisabled={selectedDates.length === 0}
+          >
             <ButtonText className="font-bold text-white">Create Time Calendar</ButtonText>
           </Button>
         </View>
@@ -417,10 +274,9 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (visible && poll) {
-      setSelectedSlots(getCurrentUserAvailability(poll, currentUid));
-      setIsDragging(false);
-    }
+    if (!visible || !poll) return;
+    setSelectedSlots(getCurrentUserAvailability(poll, currentUid));
+    setIsDragging(false);
   }, [visible, poll, currentUid]);
 
   if (!poll) return null;
@@ -438,8 +294,7 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   };
 
   const handleSlotStart = (slotKey: string) => {
-    const currentlySelected = selectedSlots.includes(slotKey);
-    const nextMode: 'add' | 'remove' = currentlySelected ? 'remove' : 'add';
+    const nextMode = selectedSlots.includes(slotKey) ? 'remove' : 'add';
     setDragMode(nextMode);
     setIsDragging(true);
     mutateSlot(slotKey, nextMode);
@@ -452,13 +307,13 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
 
   const handleSave = async () => {
     if (!poll?.id) return;
+
     try {
       setSaving(true);
-      await onSave(poll.id, selectedSlots.sort());
+      await onSave(poll.id, [...selectedSlots].sort());
       onClose();
     } catch (error) {
       console.error('Error saving availability:', error);
-      alert('Could not save availability. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -472,9 +327,13 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
           <HStack className="justify-between items-start mb-4 gap-4">
             <VStack className="flex-1">
               <Heading size="xl" className="text-zinc-50">Mark your availability</Heading>
-              <Text className="text-zinc-400 mt-1">Drag across hours to mark when you’re free. On touch devices, tap individual blocks.</Text>
+              <Text className="text-zinc-400 mt-1">
+                Drag across hours to mark when you&apos;re free. On touch devices, tap individual blocks.
+              </Text>
             </VStack>
-            <Button size="sm" variant="link" onPress={onClose}><ButtonText className="text-zinc-400">Cancel</ButtonText></Button>
+            <Button size="sm" variant="link" onPress={onClose}>
+              <ButtonText className="text-zinc-400">Cancel</ButtonText>
+            </Button>
           </HStack>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -484,13 +343,16 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
                 {dateKeys.map((dateKey) => (
                   <View key={dateKey} className="bg-zinc-800 border border-zinc-700 rounded-xl py-3 items-center" style={{ width: 140 }}>
                     <Text className="text-zinc-100 font-semibold">{formatDateLabel(dateKey)}</Text>
-                    <Text className="text-zinc-500 text-xs mt-1">{fromDateKey(dateKey).toLocaleDateString(undefined, { weekday: 'short' })}</Text>
+                    <Text className="text-zinc-500 text-xs mt-1">
+                      {fromDateKey(dateKey).toLocaleDateString(undefined, { weekday: 'short' })}
+                    </Text>
                   </View>
                 ))}
               </HStack>
 
               {Array.from({ length: Math.max(endHour - startHour, 0) }).map((_, idx) => {
                 const hour = startHour + idx;
+
                 return (
                   <HStack key={hour} className="gap-2 items-center">
                     <View style={{ width: 84 }} className="pr-2 items-end">
@@ -499,11 +361,14 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
                     {dateKeys.map((dateKey) => {
                       const slotKey = `${dateKey}|${hour}`;
                       const selected = selectedSlots.includes(slotKey);
-                      const webHandlers = Platform.OS === 'web' ? {
-                        onMouseDown: () => handleSlotStart(slotKey),
-                        onMouseEnter: () => handleSlotEnter(slotKey),
-                        onMouseUp: () => setIsDragging(false),
-                      } : {};
+                      const webHandlers = Platform.OS === 'web'
+                        ? {
+                            onMouseDown: () => handleSlotStart(slotKey),
+                            onMouseEnter: () => handleSlotEnter(slotKey),
+                            onMouseUp: () => setIsDragging(false),
+                          }
+                        : {};
+
                       return (
                         <Pressable
                           key={slotKey}
@@ -514,7 +379,9 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
                           style={{ width: 140, height: 42 }}
                         >
                           <View className="flex-1 items-center justify-center">
-                            <Text className={`text-xs font-semibold ${selected ? 'text-white' : 'text-zinc-500'}`}>{selected ? 'Available' : ''}</Text>
+                            <Text className={`text-xs font-semibold ${selected ? 'text-white' : 'text-zinc-500'}`}>
+                              {selected ? 'Available' : ''}
+                            </Text>
                           </View>
                         </Pressable>
                       );
@@ -526,7 +393,9 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
           </ScrollView>
 
           <HStack className="items-center justify-between mt-5 gap-4 flex-wrap">
-            <Text className="text-zinc-400">{selectedSlots.length} hour block{selectedSlots.length === 1 ? '' : 's'} selected</Text>
+            <Text className="text-zinc-400">
+              {selectedSlots.length} hour block{selectedSlots.length === 1 ? '' : 's'} selected
+            </Text>
             <Button size="lg" action="primary" className="bg-blue-600 border-0" onPress={handleSave} isDisabled={saving}>
               <ButtonText className="font-bold text-white">Save Availability</ButtonText>
             </Button>
@@ -537,171 +406,1062 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   );
 }
 
-const formatTimeLeft = (expirationDate: Date) => {
-  const diffMs = expirationDate.getTime() - new Date().getTime();
-  if (diffMs <= 0) return 'Ended';
+interface AvailabilityPollCardProps {
+  poll: any;
+  currentUid?: string | null;
+  compact?: boolean;
+  showResults?: boolean;
+  eventEnded: boolean;
+  isOrganizer: boolean;
+  onDelete: (poll: any) => void;
+  onOpenAvailability: (poll: any) => void;
+}
 
-  const diffMinutes = Math.floor(diffMs / (1000 * 60));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+function AvailabilityPollCard({
+  poll,
+  currentUid,
+  compact = false,
+  showResults = false,
+  eventEnded,
+  isOrganizer,
+  onDelete,
+  onOpenAvailability,
+}: AvailabilityPollCardProps) {
+  const dateKeys = Array.isArray(poll.selectedDates) ? [...poll.selectedDates].sort() : [];
+  const counts = getAvailabilityCounts(poll);
+  const currentSelections = getCurrentUserAvailability(poll, currentUid);
+  const participantCount = Object.keys(poll.availabilityByUser || {}).filter((uid) =>
+    Array.isArray(poll.availabilityByUser?.[uid]) && poll.availabilityByUser[uid].length > 0
+  ).length;
+  const topSlots = getTopAvailabilitySlots(poll, 3);
+  const startHour = typeof poll.startHour === 'number' ? poll.startHour : 8;
+  const endHour = typeof poll.endHour === 'number' ? poll.endHour : 20;
+  const shouldShowGrid = showResults || currentSelections.length > 0 || eventEnded;
 
-  if (diffDays > 0) return `Ends in ${diffDays}d`;
-  if (diffHours > 0) return `Ends in ${diffHours}h`;
-  if (diffMinutes > 0) return `Ends in ${diffMinutes}m`;
-  return 'Ends in < 1m';
-};
+  return (
+    <VStack className={`bg-zinc-800 rounded-xl border border-zinc-700 ${compact ? 'p-4 gap-3' : 'p-5 gap-4'}`}>
+      <HStack className="justify-between items-start gap-3">
+        <VStack className="flex-1 gap-1">
+          <Text className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}>
+            {poll.question}
+          </Text>
+          <Text className="text-blue-300 text-xs font-semibold uppercase tracking-wider">
+            Availability Calendar
+          </Text>
+        </VStack>
 
-// ---------------------------------------------------------------------------
-// Main screen
-// ---------------------------------------------------------------------------
+        {isOrganizer && !eventEnded && (
+          <TouchableOpacity
+            onPress={() => onDelete(poll)}
+            className="bg-red-900/30 border border-red-800/50 rounded-lg px-3 py-1 active:bg-red-900/60"
+          >
+            <Text className="text-red-400 text-xs font-semibold">Delete</Text>
+          </TouchableOpacity>
+        )}
+      </HStack>
+
+      <VStack className="gap-3">
+        <Text className="text-zinc-400 text-sm">
+          Selected dates: {dateKeys.length ? dateKeys.map(formatDateLabel).join(', ') : 'None yet'}
+        </Text>
+
+        <HStack className="items-center justify-between flex-wrap gap-3">
+          <Text className="text-zinc-300">
+            {participantCount} attendee{participantCount === 1 ? '' : 's'} submitted availability
+          </Text>
+
+          {!eventEnded && (
+            <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => onOpenAvailability(poll)}>
+              <ButtonText className="font-bold text-white">
+                {currentSelections.length > 0 ? 'Edit Availability' : 'Mark Availability'}
+              </ButtonText>
+            </Button>
+          )}
+        </HStack>
+
+        {topSlots.length > 0 && (
+          <VStack className="gap-2 bg-zinc-900/50 border border-zinc-700 rounded-xl p-4">
+            <Text className="text-zinc-200 font-semibold">Most popular slots</Text>
+            {topSlots.map((slot) => (
+              <HStack key={slot.slotKey} className="justify-between items-center">
+                <Text className="text-zinc-300">
+                  {formatFullDateLabel(slot.dateKey)} at {formatHourLabel(slot.hour)}
+                </Text>
+                <Text className="text-blue-300 font-bold">{slot.count} free</Text>
+              </HStack>
+            ))}
+          </VStack>
+        )}
+
+        {shouldShowGrid && dateKeys.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <VStack className="gap-2 pb-1">
+              <HStack className="gap-2">
+                <View style={{ width: 70 }} />
+                {dateKeys.map((dateKey) => (
+                  <View key={dateKey} className="bg-zinc-900/70 rounded-lg border border-zinc-700 py-2 items-center" style={{ width: 96 }}>
+                    <Text className="text-zinc-200 text-xs font-semibold">{formatDateLabel(dateKey)}</Text>
+                  </View>
+                ))}
+              </HStack>
+
+              {Array.from({ length: Math.max(endHour - startHour, 0) }).map((_, idx) => {
+                const hour = startHour + idx;
+
+                return (
+                  <HStack key={hour} className="gap-2 items-center">
+                    <View style={{ width: 70 }} className="items-end pr-2">
+                      <Text className="text-zinc-500 text-[11px]">{formatHourLabel(hour)}</Text>
+                    </View>
+                    {dateKeys.map((dateKey) => {
+                      const slotKey = `${dateKey}|${hour}`;
+                      const count = counts[slotKey] || 0;
+                      const selected = currentSelections.includes(slotKey);
+
+                      return (
+                        <View
+                          key={slotKey}
+                          className={`rounded-lg border items-center justify-center ${selected ? 'bg-blue-600/70 border-blue-500' : count > 0 ? 'bg-emerald-600/35 border-emerald-500/40' : 'bg-zinc-900/50 border-zinc-700'}`}
+                          style={{ width: 96, height: 28 }}
+                        >
+                          <Text className={`text-[11px] font-semibold ${selected ? 'text-white' : count > 0 ? 'text-emerald-100' : 'text-zinc-600'}`}>
+                            {count > 0 ? count : ''}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </HStack>
+                );
+              })}
+            </VStack>
+          </ScrollView>
+        )}
+      </VStack>
+    </VStack>
+  );
+}
+
+
 export default function EventScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
+  const toast = useToast();
 
   const [eventData, setEventData] = useState<any>(null);
   const [polls, setPolls] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOrganizer, setIsOrganizer] = useState(false);
 
-  // Mobile tab: 'active' | 'answered'
-  const [activeTab, setActiveTab] = useState<'active' | 'answered'>('active');
+  const [activeTab, setActiveTab] = useState<EventTab>('details');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalConfig, setModalConfig] = useState<{question?: string, choices?: string[]}>({});
-  const [isTimeModalOpen, setIsTimeModalOpen] = useState(false);
-  const [availabilityPoll, setAvailabilityPoll] = useState<any | null>(null);
-  const [isAvailabilityModalOpen, setIsAvailabilityModalOpen] = useState(false);
+  const [modalConfig, setModalConfig] = useState<PollModalConfig>(EMPTY_MODAL_CONFIG);
+  const [isQRModalOpen, setIsQRModalOpen] = useState(false);
+  const [isTimeAvailabilityModalOpen, setIsTimeAvailabilityModalOpen] = useState(false);
+  const [availabilityPoll, setAvailabilityPoll] = useState<any>(null);
+  const [isAvailabilityPickerOpen, setIsAvailabilityPickerOpen] = useState(false);
+  const [actionPoll, setActionPoll] = useState<any>(null);
+  const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
+  const [participantIds, setParticipantIds] = useState<string[]>([]);
+  const quickPollSyncingRef = useRef<Record<LinkedField, string | null>>({ time: null, location: null });
+  const autoEndingEventRef = useRef(false);
+  const mobileTabOffset = useRef(new Animated.Value(0)).current;
+  const [hasAccess, setHasAccess] = useState(false);
+  const [mobileTabWidth, setMobileTabWidth] = useState(0);
 
-  const openModal = (question = '', choices = ['', '']) => {
-    setModalConfig({ question, choices });
+  const joinLink = buildJoinLink(eventData?.joinCode);
+  const mobileTabIndex = MOBILE_EVENT_TABS.indexOf(activeTab);
+
+  const mobileTabPanResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        const isHorizontalSwipe = Math.abs(gestureState.dx) > 24;
+        const isMostlyHorizontal = Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.3;
+        return isHorizontalSwipe && isMostlyHorizontal;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const { dx, dy } = gestureState;
+        const isMostlyHorizontal = Math.abs(dx) > Math.abs(dy) * 1.3;
+        if (!isMostlyHorizontal || Math.abs(dx) < 48) return;
+
+        setActiveTab((currentTab) => {
+          const currentIndex = MOBILE_EVENT_TABS.indexOf(currentTab);
+
+          if (dx < 0 && currentIndex < MOBILE_EVENT_TABS.length - 1) {
+            return MOBILE_EVENT_TABS[currentIndex + 1];
+          }
+
+          if (dx > 0 && currentIndex > 0) {
+            return MOBILE_EVENT_TABS[currentIndex - 1];
+          }
+
+          return currentTab;
+        });
+      },
+    })
+  ).current;
+  
+  const openModal = (question = '', choices = ['', ''], linkedField?: LinkedField) => {
+    setModalConfig({
+      question,
+      choices: [...choices],
+      pollIdToEdit: undefined,
+      linkedField,
+    });
     setIsModalOpen(true);
   };
 
-  const [isQRModalOpen, setIsQRModalOpen] = useState(false);
-
-  // Construct the join link (adjust the domain to match your actual routing)
-  const joinLink = eventData?.joinCode 
-    ? `https://polled.app/join/${eventData.joinCode}` 
-    : `https://polled.app/join/${id}`;
-
-  const handleCopyLink = async () => {
-    await Clipboard.setStringAsync(joinLink);
-    alert('Join link copied to clipboard!'); 
+  const openCreateModal = () => {
+    setModalConfig(EMPTY_MODAL_CONFIG);
+    setIsModalOpen(true);
   };
 
-  const handleShare = async () => {
+  const openTimeAvailabilityModal = () => {
+    setIsTimeAvailabilityModalOpen(true);
+  };
+
+  const closePollModal = () => {
+    setIsModalOpen(false);
+    setModalConfig(EMPTY_MODAL_CONFIG);
+  };
+
+  const openAvailabilityPicker = (poll: any) => {
+    if (eventData?.identityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-amber-400 font-bold text-sm">Linked Account Required</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Link Google or email before responding to this availability calendar.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}`);
+      return;
+    }
+
+    setAvailabilityPoll(poll);
+    setIsAvailabilityPickerOpen(true);
+  };
+  const eventEnded = isEventEnded(eventData);
+
+  const queueNotificationJob = async (type: 'poll_nudge' | 'role_nudge', title: string, body: string) => {
     try {
-      await Share.share({
-        message: `Join my event "${eventData?.title}" on Polled!\nCode: ${eventData?.joinCode}\n${joinLink}`,
+      await enqueueNotificationJob({
+        eventId: id as string,
+        type,
+        title,
+        body,
       });
     } catch (error) {
-      console.error('Error sharing event:', error);
+      console.error('Error queueing notification job:', error);
     }
   };
 
-  // Real-time listener — event doc
+  // --- 2. The handler function you pass to your Poll components ---
+  const handleNudge = async (poll: any) => {
+    if (eventEnded) return;
+    const itemType = getEventItemType(poll);
+    await queueNotificationJob(
+      itemType === 'role' ? 'role_nudge' : 'poll_nudge',
+      itemType === 'role' ? 'Role still open!' : "Don't forget to vote! ?",
+      itemType === 'role'
+        ? `The role "${poll.question}" is still available to claim.`
+        : `The poll "${poll.question}" is waiting for your response.`
+    );
+    trackEvent(itemType === 'role' ? 'role_nudged' : 'poll_nudged', { event_id: id as string, poll_id: poll.id });
+
+    toast.show({
+      placement: "top",
+      render: ({ id: toastId }) => (
+        <Toast nativeID={toastId} className="bg-zinc-800 border border-blue-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+          <VStack>
+            <ToastTitle className="text-blue-400 font-bold text-sm">Nudge Sent!</ToastTitle>
+            <ToastDescription className="text-zinc-300 text-xs mt-0.5">A reminder has been sent to everyone in the event.</ToastDescription>
+          </VStack>
+        </Toast>
+      ),
+    });
+  };
+
+  const handleNativeShare = async () => {
+    try {
+      const result = await Share.share({
+        message: `Join my event "${eventData?.title}" on Polled! Code: ${eventData?.joinCode}\n${joinLink}`,
+      });
+
+      // Show a success toast if they actually completed the share action
+      if (result.action === Share.sharedAction) {
+        trackEvent('event_shared', {
+          event_id: id as string,
+          method: 'native_share',
+        });
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-green-400 font-bold text-sm">Shared!</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">Thanks for spreading the word about the event.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      }
+      // Note: If result.action === Share.dismissedAction, we do nothing (they just closed the menu)
+
+    } catch (error) {
+      // Show an error toast if the native share sheet fails to open
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-red-400 font-bold text-sm">Sharing Failed</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Something went wrong trying to open the share menu.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+    }
+  };
+
+  const handleCopyCode = async () => {
+    const codeToCopy = eventData?.joinCode || id;
+    if (!codeToCopy) return;
+
+    await Clipboard.setStringAsync(codeToCopy as string);
+    trackEvent('event_code_copied', { event_id: id as string });
+    
+    toast.show({
+      placement: "top",
+      render: ({ id: toastId }) => (
+        <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+          <VStack>
+            <ToastTitle className="text-green-400 font-bold text-sm">Copied!</ToastTitle>
+            <ToastDescription className="text-zinc-300 text-xs mt-0.5">Join code copied to clipboard.</ToastDescription>
+          </VStack>
+        </Toast>
+      ),
+    });
+  };
+
   useEffect(() => {
     if (!id || !auth.currentUser) return;
-    const eventRef = doc(db, 'events', id as string);
-    const unsubscribe = onSnapshot(eventRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setEventData(data);
-        setIsOrganizer(data.organizerId === auth.currentUser?.uid);
-      }
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, [id]);
 
-  // Real-time listener — polls subcollection
-  useEffect(() => {
-    if (!id) return;
-    const pollsRef = collection(db, 'events', id as string, 'polls');
-    const q = query(pollsRef, orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetched = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setPolls(fetched);
-    });
-    return () => unsubscribe();
-  }, [id]);
+    let unsubscribeEvent: (() => void) | undefined;
+    let unsubscribePolls: (() => void) | undefined;
+    let unsubscribeParticipants: (() => void) | undefined;
 
-  // Vote handler
-  const handleVote = async (pollId: string, optionIndex: number, currentOptions: any[], allowMultipleVotes: boolean) => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    const initializeEventAccess = async () => {
+      try {
+        const eventRef = doc(db, 'events', id as string);
+        const eventDoc = await getDoc(eventRef);
 
-    const poll = polls.find(p => p.id === pollId);
-    if (poll?.expiresAt) {
-      const expirationDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt);
-      if (new Date() > expirationDate) {
-        alert('This poll has ended.');
-        return;
-      }
-    }
+        if (!eventDoc.exists()) {
+          setLoading(false);
+          router.replace('/dashboard');
+          return;
+        }
 
-    const newOptions = currentOptions.map((opt) => ({
-      ...opt,
-      voterIds: [...opt.voterIds],
-    }));
+        const event = eventDoc.data();
+        const currentUid = auth.currentUser?.uid;
+        const userDoc = currentUid ? await getDoc(doc(db, 'users', currentUid)) : null;
+        const joinedEvents = userDoc?.exists() ? (userDoc.data().joinedEvents || []) : [];
+        const userHasAccess = event.organizerId === currentUid || joinedEvents.includes(id as string);
 
-    const hasVotedForThis = newOptions[optionIndex].voterIds.includes(uid);
+        if (!userHasAccess) {
+          trackEvent('event_access_redirected_to_join', {
+            event_id: id as string,
+            join_code_present: !!event.joinCode,
+          });
+          setLoading(false);
+          router.replace(event.joinCode ? `/join?code=${event.joinCode}` : '/join');
+          return;
+        }
 
-    if (allowMultipleVotes) {
-      if (hasVotedForThis) {
-        newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter((v: string) => v !== uid);
-      } else {
-        newOptions[optionIndex].voterIds.push(uid);
-      }
-    } else {
-      if (hasVotedForThis) {
-        newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter((v: string) => v !== uid);
-      } else {
-        newOptions.forEach((opt) => {
-          opt.voterIds = opt.voterIds.filter((v: string) => v !== uid);
+        setHasAccess(true);
+
+        unsubscribeEvent = onSnapshot(eventRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setIsOrganizer(data.organizerId === auth.currentUser?.uid);
+
+            if (shouldAutoEndEvent(data)) {
+              if (!autoEndingEventRef.current) {
+                autoEndingEventRef.current = true;
+                void updateDoc(eventRef, {
+                  status: 'ended',
+                  endedAt: serverTimestamp(),
+                }).catch((error) => {
+                  autoEndingEventRef.current = false;
+                  console.error('Error auto-ending event:', error);
+                });
+              }
+              setEventData({ ...data, status: 'ended' });
+              return;
+            }
+
+            autoEndingEventRef.current = false;
+            setEventData(data);
+          }
+          setLoading(false);
         });
-        newOptions[optionIndex].voterIds.push(uid);
-      }
-    }
 
-    try {
-      const pollRef = doc(db, 'events', id as string, 'polls', pollId);
-      await updateDoc(pollRef, { options: newOptions });
-    } catch (error) {
-      console.error('Error updating vote:', error);
-    }
+        const pollsRef = collection(db, 'events', id as string, 'polls');
+        const q = query(pollsRef, orderBy('createdAt', 'desc'));
+        unsubscribePolls = onSnapshot(q, (snapshot) => {
+          setPolls(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+        });
+
+        const membersQuery = query(collection(db, 'events', id as string, 'members'));
+        unsubscribeParticipants = onSnapshot(membersQuery, (snapshot) => {
+          const nextParticipantIds = snapshot.docs
+            .map((participantDoc) => participantDoc.id)
+            .sort((a, b) => a.localeCompare(b));
+          setParticipantIds(nextParticipantIds);
+        });
+      } catch (error) {
+        console.error('Error checking event access:', error);
+        setLoading(false);
+        router.replace('/dashboard');
+      }
+    };
+
+    initializeEventAccess();
+
+    return () => {
+      if (unsubscribeEvent) unsubscribeEvent();
+      if (unsubscribePolls) unsubscribePolls();
+      if (unsubscribeParticipants) unsubscribeParticipants();
+    };
+  }, [id, router]);
+
+  const getLinkedQuickPoll = (field: LinkedField) =>
+    polls.find((poll) => getEventItemType(poll) === 'poll' && poll.linkedField === field);
+
+  const getWinningOption = (poll: any) => {
+    const options = Array.isArray(poll?.options) ? poll.options : [];
+    if (!options.length) return null;
+    const maxVotes = Math.max(...options.map((option: any) => option.voterIds.length));
+    if (maxVotes <= 0) return null;
+    const winners = options.filter((option: any) => option.voterIds.length === maxVotes);
+    return winners.length === 1 ? winners[0] : null;
   };
 
-  const handleSaveAvailability = async (pollId: string, slotKeys: string[]) => {
+  useEffect(() => {
+    if (!id || !eventData || !hasAccess) return;
+
+    const syncQuickPollDetails = async () => {
+      const eventRef = doc(db, 'events', id as string);
+
+      for (const field of ['time', 'location'] as LinkedField[]) {
+        const linkedQuickPoll = getLinkedQuickPoll(field);
+        if (!linkedQuickPoll || !isPollExpired(linkedQuickPoll)) continue;
+
+        const winningOption = getWinningOption(linkedQuickPoll);
+        if (!winningOption?.text?.trim()) continue;
+
+        const winningValue = winningOption.text.trim();
+        const currentValue = eventData?.[field]?.trim() || '';
+
+        if (currentValue === winningValue) {
+          quickPollSyncingRef.current[field] = linkedQuickPoll.id;
+          continue;
+        }
+
+        if (quickPollSyncingRef.current[field] === linkedQuickPoll.id) continue;
+        quickPollSyncingRef.current[field] = linkedQuickPoll.id;
+
+        try {
+          await updateDoc(eventRef, {
+            [field]: winningValue,
+          });
+          trackEvent('quick_poll_result_applied', {
+            event_id: id as string,
+            field,
+            poll_id: linkedQuickPoll.id,
+          });
+        } catch (error) {
+          quickPollSyncingRef.current[field] = null;
+          console.error(`Error syncing ${field} quick poll result:`, error);
+        }
+      }
+    };
+
+    syncQuickPollDetails();
+  }, [id, eventData, polls, hasAccess]);
+
+  useEffect(() => {
+    if (!isMobile || mobileTabWidth <= 0) return;
+
+    Animated.timing(mobileTabOffset, {
+      toValue: -(mobileTabIndex * mobileTabWidth),
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [isMobile, mobileTabIndex, mobileTabOffset, mobileTabWidth]);
+
+  const handleVote = async (pollId: string, selectedIndices: number | number[], currentOptions: any[], allowMultipleVotes: boolean) => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
-    const poll = polls.find((item) => item.id === pollId);
-    const existing = poll?.availabilityByUser || {};
-    const updatedAvailability = { ...existing, [uid]: slotKeys };
-    await updateDoc(doc(db, 'events', id as string, 'polls', pollId), { availabilityByUser: updatedAvailability });
+    if (eventData?.identityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-amber-400 font-bold text-sm">Linked Account Required</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Link Google or email before voting in this event.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}`);
+      return;
+    }
+    if (eventEnded) {
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-red-400 font-bold text-sm">Event Ended</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">This event is no longer accepting votes.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+      return;
+    }
+
+    const pollRef = doc(db, 'events', id as string, 'polls', pollId);
+    let updatedItemType: 'poll' | 'role' = 'poll';
+    let roleAction: 'claimed' | 'unclaimed' | null = null;
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const pollDoc = await transaction.get(pollRef);
+        if (!pollDoc.exists()) throw new Error("Poll not found");
+
+        const pollData = pollDoc.data();
+        updatedItemType = getEventItemType(pollData);
+
+        if (updatedItemType === 'role') {
+          const roleOption = pollData.options?.[0];
+          const roleIsFull = pollData.slotLimit != null && getResponseCount(pollData) >= pollData.slotLimit;
+          const alreadySelected = roleOption?.voterIds?.includes(uid);
+          roleAction = alreadySelected ? 'unclaimed' : 'claimed';
+
+          if (roleIsFull && !alreadySelected) {
+            throw new Error('FULL');
+          }
+        } else if (isEventItemExpired(pollData)) {
+          throw new Error("EXPIRED");
+        }
+
+        const existingOptions = Array.isArray(pollData.options) ? pollData.options : [];
+        let newOptions = existingOptions.map((opt: any) => ({ 
+          ...opt, 
+          voterIds: [...opt.voterIds] 
+        }));
+
+        if (newOptions.length === 0) {
+          throw new Error('INVALID_OPTIONS');
+        }
+        
+        if (allowMultipleVotes && Array.isArray(selectedIndices)) {
+          newOptions.forEach((opt: any) => opt.voterIds = opt.voterIds.filter((v: string) => v !== uid));
+          selectedIndices.forEach((idx) => {
+            if (newOptions[idx]) {
+              newOptions[idx].voterIds.push(uid);
+            }
+          });
+        } else {
+          const optionIndex = selectedIndices as number;
+          const hasVotedForThis = newOptions[optionIndex].voterIds.includes(uid);
+          if (hasVotedForThis) {
+            newOptions[optionIndex].voterIds = newOptions[optionIndex].voterIds.filter((v: string) => v !== uid);
+          } else {
+            newOptions.forEach((opt: any) => opt.voterIds = opt.voterIds.filter((v: string) => v !== uid));
+            newOptions[optionIndex].voterIds.push(uid);
+          }
+        }
+
+        transaction.update(pollRef, { options: newOptions });
+      });
+      trackEvent(roleAction
+        ? (roleAction === 'unclaimed' ? 'role_unclaimed' : 'role_claimed')
+        : 'poll_voted', {
+        event_id: id as string,
+        poll_id: pollId,
+        allow_multiple: allowMultipleVotes,
+        selection_count: Array.isArray(selectedIndices) ? selectedIndices.length : 1,
+      });
+      
+    } catch (error: any) {
+      if (error.message === 'FULL') {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-amber-400 font-bold text-sm">Role Filled</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">All available spots for that role have already been claimed.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      } else if (error.message === "EXPIRED") {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-red-400 font-bold text-sm">Poll Ended</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">This poll is no longer accepting votes.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      } else if (error.message === 'INVALID_OPTIONS') {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-red-400 font-bold text-sm">Poll Unavailable</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">This poll is missing options and cannot accept votes right now.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      } else {
+        console.error('Error updating vote:', error);
+      }
+    }
   };
 
-  // Delete a poll (organizer only)
-  const handleDeletePoll = async (pollId: string) => {
+  const handleAddChoice = async (pollId: string, choiceText: string) => {
+    const uid = auth.currentUser?.uid;
+    const trimmedChoice = choiceText.trim();
+    if (!uid || !trimmedChoice) return false;
+    if (eventEnded) return false;
+
+    const pollRef = doc(db, 'events', id as string, 'polls', pollId);
+
+    try {
+      let outcome: 'added' | 'duplicate' | 'disabled' | 'expired' = 'disabled';
+
+      await runTransaction(db, async (transaction) => {
+        const pollDoc = await transaction.get(pollRef);
+        if (!pollDoc.exists()) {
+          throw new Error('NOT_FOUND');
+        }
+
+        const pollData = pollDoc.data();
+
+        if (getEventItemType(pollData) !== 'poll') {
+          throw new Error('INVALID_TYPE');
+        }
+
+        if (isEventItemExpired(pollData)) {
+          outcome = 'expired';
+          return;
+        }
+
+        if (!pollData.allowInviteeChoices) {
+          outcome = 'disabled';
+          return;
+        }
+
+        const normalizedChoice = trimmedChoice.toLocaleLowerCase();
+        const existingOptions = Array.isArray(pollData.options) ? pollData.options : [];
+        const hasDuplicate = existingOptions.some(
+          (option: any) => (option?.text || '').trim().toLocaleLowerCase() === normalizedChoice
+        );
+
+        if (hasDuplicate) {
+          outcome = 'duplicate';
+          return;
+        }
+
+        transaction.update(pollRef, {
+          options: [
+            ...existingOptions,
+            {
+              text: trimmedChoice,
+              voterIds: [],
+            },
+          ],
+        });
+
+        outcome = 'added';
+      });
+
+      const finalOutcome = outcome as 'added' | 'duplicate' | 'disabled' | 'expired';
+
+      if (finalOutcome === 'added') {
+        trackEvent('poll_choice_added_by_invitee', {
+          event_id: id as string,
+          poll_id: pollId,
+        });
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-green-400 font-bold text-sm">Choice Added</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">Your option is now part of the poll.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+        return true;
+      }
+
+      if (finalOutcome === 'duplicate') {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-amber-400 font-bold text-sm">Already There</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">That option already exists in this poll.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+        return false;
+      }
+
+      if (finalOutcome === 'expired') {
+        toast.show({
+          placement: "top",
+          render: ({ id: toastId }) => (
+            <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+              <VStack>
+                <ToastTitle className="text-red-400 font-bold text-sm">Poll Ended</ToastTitle>
+                <ToastDescription className="text-zinc-300 text-xs mt-0.5">This poll is no longer accepting changes.</ToastDescription>
+              </VStack>
+            </Toast>
+          ),
+        });
+      }
+
+      return false;
+    } catch (error) {
+      console.error('Error adding invitee poll choice:', error);
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-red-400 font-bold text-sm">Could not add choice</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Please try again in a moment.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+      return false;
+    }
+  };
+
+  const handleDeletePoll = async (poll: any) => {
     if (!id) return;
     try {
-      await deleteDoc(doc(db, 'events', id as string, 'polls', pollId));
+      await deleteDoc(doc(db, 'events', id as string, 'polls', poll.id));
+      trackEvent(getEventItemType(poll) === 'role' ? 'role_deleted' : 'poll_deleted', {
+        event_id: id as string,
+        poll_id: poll.id,
+      });
     } catch (error) {
       console.error('Error deleting poll:', error);
     }
   };
 
-  const currentUid = auth.currentUser?.uid;
-  const userHasAnsweredPoll = (poll: any) => {
-    if (poll.type === 'availability') {
-      return getCurrentUserAvailability(poll, currentUid).length > 0;
+  const handleEndPollEarly = async (poll: any) => {
+    if (!id) return;
+    try {
+      await updateDoc(doc(db, 'events', id as string, 'polls', poll.id), {
+        expiresAt: new Date()
+      });
+      trackEvent('poll_ended_early', { event_id: id as string, poll_id: poll.id });
+    } catch (error) {
+      console.error('Error ending poll early:', error);
     }
-    return poll.options.some((opt: any) => opt.voterIds.includes(currentUid));
   };
 
-  const activePolls = polls.filter((poll) => !userHasAnsweredPoll(poll));
-  const answeredPolls = polls.filter((poll) => userHasAnsweredPoll(poll));
+  const handleEditPoll = (poll: any) => {
+    trackEvent(getEventItemType(poll) === 'role' ? 'role_edit_started' : 'poll_edit_started', { event_id: id as string, poll_id: poll.id });
+    setModalConfig({ 
+      question: poll.question, 
+      choices: poll.options.map((o: any) => o.text),
+      pollIdToEdit: poll.id,
+      linkedField: poll.linkedField,
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleRerunPoll = (poll: any) => {
+    if (getEventItemType(poll) === 'role') return;
+    trackEvent('poll_rerun_started', { event_id: id as string, poll_id: poll.id });
+    setModalConfig({ 
+      question: poll.question, 
+      choices: poll.options.map((o: any) => o.text),
+      pollIdToEdit: undefined,
+      linkedField: poll.linkedField,
+    });
+    setIsModalOpen(true);
+  };
+
+  const currentUid = auth.currentUser?.uid;
+
+  const isAvailabilityPoll = (poll: any) => poll?.type === 'availability';
+
+  const isPollExpired = (poll: any) => {
+    if (isAvailabilityPoll(poll)) return false;
+    return isEventItemExpired(poll);
+  };
+
+  const hasRespondedToPoll = (poll: any) => {
+    if (!currentUid) return false;
+    if (isAvailabilityPoll(poll)) {
+      return getCurrentUserAvailability(poll, currentUid).length > 0;
+    }
+
+    return getRespondedUserIds(poll).includes(currentUid);
+  };
+
+  const handleSaveAvailability = async (pollId: string, slotKeys: string[]) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !id) return;
+    if (eventEnded) return;
+
+    if (eventData?.identityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-amber-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-amber-400 font-bold text-sm">Linked Account Required</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Link Google or email before responding to this availability calendar.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}`);
+      return;
+    }
+
+    const poll = polls.find((item) => item.id === pollId);
+    const existing = poll?.availabilityByUser || {};
+    await updateDoc(doc(db, 'events', id as string, 'polls', pollId), {
+      availabilityByUser: {
+        ...existing,
+        [uid]: [...slotKeys].sort(),
+      },
+    });
+  };
+
+  const activePolls = polls.filter((poll) => {
+    if (eventEnded) return false;
+    return !hasRespondedToPoll(poll) && !isPollExpired(poll);
+  });
+  const answeredPolls = polls.filter((poll) => {
+    if (eventEnded) return true;
+    return hasRespondedToPoll(poll) || isPollExpired(poll);
+  });
+
+  const roleAssignments = polls.reduce<Record<string, string[]>>((acc, poll) => {
+    if (getEventItemType(poll) === 'role') {
+      getRespondedUserIds(poll).forEach((uid) => {
+        acc[uid] = [...(acc[uid] || []), poll.question];
+      });
+    }
+
+    return acc;
+  }, {});
+  const headcount = participantIds.length;
+  const timeQuickPoll = getLinkedQuickPoll('time');
+  const locationQuickPoll = getLinkedQuickPoll('location');
+
+  const renderDetailValue = (field: LinkedField) => {
+    const currentValue = eventData?.[field];
+    if (currentValue) {
+      return <Text className="text-zinc-50 text-lg font-semibold">{currentValue}</Text>;
+    }
+
+    if (!isOrganizer || eventEnded) {
+      return <Text className="text-zinc-50 text-lg font-semibold">TBD</Text>;
+    }
+
+    const linkedQuickPoll = field === 'time' ? timeQuickPoll : locationQuickPoll;
+    const defaultQuestion = field === 'time' ? 'What time?' : 'Where we going?';
+    const defaultButtonLabel = field === 'time' ? 'Poll Time' : 'Poll Location';
+
+    if (linkedQuickPoll && !isPollExpired(linkedQuickPoll)) {
+      return (
+        <Text className="text-blue-400 text-base font-semibold">
+          Currently polling
+        </Text>
+      );
+    }
+
+    if (linkedQuickPoll && isPollExpired(linkedQuickPoll) && !getWinningOption(linkedQuickPoll)) {
+      return (
+        <Button
+          size="sm"
+          variant="outline"
+          className="self-start border-zinc-600 bg-zinc-800 mt-2"
+          onPress={() => openModal(defaultQuestion, ['', ''], field)}
+        >
+          <ButtonText className="text-zinc-50 font-semibold">Rerun Poll</ButtonText>
+        </Button>
+      );
+    }
+
+    if (linkedQuickPoll && isPollExpired(linkedQuickPoll) && getWinningOption(linkedQuickPoll)) {
+      return <Text className="text-blue-400 text-base font-semibold">Updating from quick poll...</Text>;
+    }
+
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        className="self-start border-zinc-600 bg-zinc-800 mt-2"
+        onPress={() => openModal(defaultQuestion, ['', ''], field)}
+      >
+        <ButtonText className="text-zinc-50 font-semibold">{defaultButtonLabel}</ButtonText>
+      </Button>
+    );
+  };
+
+  const renderDetailsTab = () => (
+    <VStack className="gap-4 mt-1">
+      <VStack className="bg-zinc-800/40 p-5 rounded-2xl border border-zinc-700/50 gap-4">
+        <VStack>
+          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Status</Text>
+          <Text className={`text-lg font-bold ${eventData?.status === 'voting' ? 'text-green-400' : 'text-red-300'}`}>
+            {eventData?.status === 'voting' ? 'Active Voting' : getEventStatusLabel(eventData)}
+          </Text>
+        </VStack>
+        <View className="h-px bg-zinc-700/50 w-full" />
+        <VStack>
+          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Time</Text>
+          {renderDetailValue('time')}
+        </VStack>
+        <View className="h-px bg-zinc-700/50 w-full" />
+        <VStack>
+          <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Location</Text>
+          {renderDetailValue('location')}
+        </VStack>
+        <View className="h-px bg-zinc-700/50 w-full" />
+        <HStack className="justify-between items-center">
+          <VStack>
+            <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Participants</Text>
+            <Text className="text-zinc-50 text-lg font-semibold mt-0.5">{headcount} {headcount === 1 ? 'person' : 'people'}</Text>
+          </VStack>
+          <TouchableOpacity activeOpacity={0.7} onPress={() => {
+            trackEvent('participants_modal_opened', { event_id: id as string });
+            setIsParticipantsModalOpen(true);
+          }} className="p-2 bg-zinc-700/50 rounded-full border border-zinc-600/50">
+            <Eye size={20} color="#a1a1aa" />
+          </TouchableOpacity>
+        </HStack>
+      </VStack>
+
+      {isOrganizer && (
+        <VStack className="gap-3">
+          <Button 
+            size="xl" 
+            variant="outline" 
+            className="border-zinc-600 bg-zinc-800" 
+            onPress={() => router.push(`/edit/${id as string}`)}
+          >
+            <ButtonText className="font-bold text-zinc-50">Edit Event Details</ButtonText>
+          </Button>
+        </VStack>
+      )}
+    </VStack>
+  );
+
+  const renderPollItem = (poll: any, answered = false) => {
+    if (isAvailabilityPoll(poll)) {
+      return (
+        <AvailabilityPollCard
+          key={poll.id}
+          poll={poll}
+          compact={answered}
+          showResults={answered}
+          currentUid={currentUid}
+          eventEnded={eventEnded}
+          isOrganizer={isOrganizer}
+          onDelete={handleDeletePoll}
+          onOpenAvailability={openAvailabilityPicker}
+        />
+      );
+    }
+
+    return (
+      <PollCard
+        key={poll.id}
+        poll={poll}
+        compact={answered}
+        showResults={answered}
+        isOrganizer={isOrganizer && !eventEnded}
+        currentUid={currentUid}
+        onVote={handleVote}
+        onAddChoice={handleAddChoice}
+        onActionPress={setActionPoll}
+      />
+    );
+  };
+
+  const renderCreateActions = (compact = false) => (
+    <VStack className={compact ? 'gap-3' : 'gap-2'}>
+      <Button
+        size={compact ? 'md' : 'sm'}
+        action="primary"
+        className="bg-blue-600 border-0"
+        onPress={() => {
+          trackEvent('item_create_started', { event_id: id as string });
+          openCreateModal();
+        }}
+      >
+        <ButtonText className="font-bold text-white">{compact ? '+ Create Poll or Role' : '+ New'}</ButtonText>
+      </Button>
+
+      <Button
+        size={compact ? 'md' : 'sm'}
+        variant="outline"
+        className="border-zinc-600 bg-zinc-800"
+        onPress={openTimeAvailabilityModal}
+      >
+        <ButtonText className="font-bold text-zinc-50">{compact ? 'Create Time Calendar' : 'Time Calendar'}</ButtonText>
+      </Button>
+    </VStack>
+  );
+
+  const renderActiveTab = () => (
+    activePolls.length === 0 ? (
+      <EmptyState message="You're all caught up!" />
+    ) : (
+      activePolls.map((poll) => renderPollItem(poll))
+    )
+  );
+
+  const renderAnsweredTab = () => (
+    answeredPolls.length === 0 ? (
+      <EmptyState message="No answered polls yet." />
+    ) : (
+      answeredPolls.map((poll) => renderPollItem(poll, true))
+    )
+  );
 
   if (loading) {
     return (
@@ -711,495 +1471,204 @@ export default function EventScreen() {
     );
   }
 
-
-  // -------------------------------------------------------------------------
-  // Unified Poll Card (supports both standard polls and availability calendars)
-  // -------------------------------------------------------------------------
-  const PollCard = ({ poll, compact = false, deletable = false, showResults = false }: { poll: any; compact?: boolean; deletable?: boolean; showResults?: boolean; }) => {
-    const isAvailabilityPoll = poll.type === 'availability';
-    const totalVotes = isAvailabilityPoll ? 0 : poll.options.reduce((s: number, o: any) => s + o.voterIds.length, 0);
-    const expiresAtDate = poll.expiresAt?.toDate ? poll.expiresAt.toDate() : (poll.expiresAt ? new Date(poll.expiresAt) : null);
-    const [isExpired, setIsExpired] = useState(() => expiresAtDate ? new Date() > expiresAtDate : false);
-    const [timeLeft, setTimeLeft] = useState(() => expiresAtDate && !isExpired ? formatTimeLeft(expiresAtDate) : '');
-
-    useEffect(() => {
-      if (!expiresAtDate || isExpired) return;
-      const interval = setInterval(() => {
-        if (new Date() > expiresAtDate) {
-          setIsExpired(true);
-          clearInterval(interval);
-        } else {
-          setTimeLeft(formatTimeLeft(expiresAtDate));
-        }
-      }, 60000);
-      return () => clearInterval(interval);
-    }, [expiresAtDate, isExpired]);
-
-    const displayResults = showResults || isExpired;
-
-    if (isAvailabilityPoll) {
-      const dateKeys = Array.isArray(poll.selectedDates) ? [...poll.selectedDates].sort() : [];
-      const counts = getAvailabilityCounts(poll);
-      const currentSelections = getCurrentUserAvailability(poll, currentUid);
-      const participantCount = Object.keys(poll.availabilityByUser || {}).filter((uid) => Array.isArray(poll.availabilityByUser?.[uid]) && poll.availabilityByUser[uid].length > 0).length;
-      const topSlots = getTopAvailabilitySlots(poll, 3);
-
-      return (
-        <VStack className={`bg-zinc-800 rounded-xl border ${isExpired ? 'border-zinc-700/50 opacity-80' : 'border-zinc-700'} ${compact ? 'p-4 gap-3' : 'p-5 gap-4'}`}>
-          <HStack className="justify-between items-start gap-3">
-            <VStack className="flex-1 gap-1">
-              <Text className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}>{poll.question}</Text>
-              <Text className="text-blue-300 text-xs font-semibold uppercase tracking-wider">When2Meet-style availability</Text>
-            </VStack>
-            <HStack className="items-center gap-3 shrink-0">
-              {!isExpired && expiresAtDate && (
-                <Box className="bg-blue-900/30 px-2 py-1 rounded border border-blue-800/50 justify-center"><Text className="text-blue-400 text-xs font-bold uppercase tracking-wider leading-none">{timeLeft}</Text></Box>
-              )}
-              {deletable && (
-                <TouchableOpacity onPress={() => handleDeletePoll(poll.id)} className="bg-red-900/30 border border-red-800/50 rounded-lg px-3 py-1 active:bg-red-900/60 justify-center"><Text className="text-red-400 text-xs font-semibold leading-none">Delete</Text></TouchableOpacity>
-              )}
-            </HStack>
-          </HStack>
-
-          <VStack className="gap-3">
-            <Text className="text-zinc-400 text-sm">Selected dates: {dateKeys.map(formatDateLabel).join(' • ')}</Text>
-            <HStack className="items-center justify-between flex-wrap gap-3">
-              <Text className="text-zinc-300">{participantCount} attendee{participantCount === 1 ? '' : 's'} submitted availability</Text>
-              <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => { setAvailabilityPoll(poll); setIsAvailabilityModalOpen(true); }}>
-                <ButtonText className="font-bold text-white">{currentSelections.length > 0 ? 'Edit Availability' : 'Mark Availability'}</ButtonText>
-              </Button>
-            </HStack>
-
-            {topSlots.length > 0 && (
-              <VStack className="gap-2 bg-zinc-900/50 border border-zinc-700 rounded-xl p-4">
-                <Text className="text-zinc-200 font-semibold">Most popular slots</Text>
-                {topSlots.map((slot) => (
-                  <HStack key={slot.slotKey} className="justify-between items-center">
-                    <Text className="text-zinc-300">{formatFullDateLabel(slot.dateKey)} · {formatHourLabel(slot.hour)}</Text>
-                    <Text className="text-blue-300 font-bold">{slot.count} free</Text>
-                  </HStack>
-                ))}
-              </VStack>
-            )}
-
-            {dateKeys.length > 0 && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <VStack className="gap-2 pb-1">
-                  <HStack className="gap-2">
-                    <View style={{ width: 70 }} />
-                    {dateKeys.map((dateKey) => (
-                      <View key={dateKey} className="bg-zinc-900/70 rounded-lg border border-zinc-700 py-2 items-center" style={{ width: 96 }}>
-                        <Text className="text-zinc-200 text-xs font-semibold">{formatDateLabel(dateKey)}</Text>
-                      </View>
-                    ))}
-                  </HStack>
-                  {Array.from({ length: Math.max((poll.endHour || 20) - (poll.startHour || 8), 0) }).map((_, idx) => {
-                    const hour = (poll.startHour || 8) + idx;
-                    return (
-                      <HStack key={hour} className="gap-2 items-center">
-                        <View style={{ width: 70 }} className="items-end pr-2"><Text className="text-zinc-500 text-[11px]">{formatHourLabel(hour)}</Text></View>
-                        {dateKeys.map((dateKey) => {
-                          const slotKey = `${dateKey}|${hour}`;
-                          const count = counts[slotKey] || 0;
-                          const selected = currentSelections.includes(slotKey);
-                          return (
-                            <View key={slotKey} className={`rounded-lg border items-center justify-center ${selected ? 'bg-blue-600/70 border-blue-500' : count > 0 ? 'bg-emerald-600/35 border-emerald-500/40' : 'bg-zinc-900/50 border-zinc-700'}`} style={{ width: 96, height: 28 }}>
-                              <Text className={`text-[11px] font-semibold ${selected ? 'text-white' : count > 0 ? 'text-emerald-100' : 'text-zinc-600'}`}>{count > 0 ? count : ''}</Text>
-                            </View>
-                          );
-                        })}
-                      </HStack>
-                    );
-                  })}
-                </VStack>
-              </ScrollView>
-            )}
-          </VStack>
-        </VStack>
-      );
-    }
-
-    return (
-      <VStack className={`bg-zinc-800 rounded-xl border ${isExpired ? 'border-zinc-700/50 opacity-80' : 'border-zinc-700'} gap-2 ${compact ? 'p-4' : 'p-5 gap-4'}`}>
-        <HStack className="justify-between items-start">
-          <VStack className={`flex-1 ${compact ? 'gap-0.5' : 'gap-1'}`}>
-            <HStack className="items-center gap-2 mb-1 flex-wrap"><Text className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}>{poll.question}</Text></HStack>
-            {poll.allowMultiple && !isExpired && <Text className={`text-blue-400 font-semibold uppercase tracking-wider ${compact ? 'text-[10px]' : 'text-xs'}`}>Select Multiple</Text>}
-          </VStack>
-          <HStack className="items-center gap-3 shrink-0">
-            {isExpired && <Box className="bg-red-500/20 px-2 py-1 rounded border border-red-500 justify-center"><Text className="text-red-400 text-xs font-bold uppercase tracking-wider leading-none">Ended</Text></Box>}
-            {!isExpired && expiresAtDate && <Box className="bg-blue-900/30 px-2 py-1 rounded border border-blue-800/50 justify-center"><Text className="text-blue-400 text-xs font-bold uppercase tracking-wider leading-none">{timeLeft}</Text></Box>}
-            {deletable && <TouchableOpacity onPress={() => handleDeletePoll(poll.id)} className="bg-red-900/30 border border-red-800/50 rounded-lg px-3 py-1 active:bg-red-900/60 justify-center" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}><Text className="text-red-400 text-xs font-semibold leading-none">Delete</Text></TouchableOpacity>}
-          </HStack>
-        </HStack>
-
-        <VStack className={compact ? 'gap-1.5 mt-1' : 'gap-2 mt-2'}>
-          {poll.options.map((option: any, index: number) => {
-            const hasVoted = option.voterIds.includes(currentUid);
-            const voteCount = option.voterIds.length;
-            const pct = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
-
-            return (
-              <TouchableOpacity key={index} activeOpacity={isExpired ? 1 : 0.7} disabled={isExpired} onPress={() => handleVote(poll.id, index, poll.options, poll.allowMultiple)} className={`rounded-lg border overflow-hidden relative ${compact ? 'p-3' : 'p-4'} ${hasVoted ? 'bg-blue-900/40 border-blue-500' : 'bg-zinc-900/50 border-zinc-700'}`}>
-                {displayResults && <View className={`absolute top-0 bottom-0 left-0 ${hasVoted ? 'bg-blue-600/30' : 'bg-zinc-700/50'}`} style={{ width: `${pct}%` }} />}
-                <HStack className="justify-between items-center z-10">
-                  <Text className={`font-medium ${compact ? 'text-sm' : ''} ${hasVoted ? 'text-blue-100' : 'text-zinc-300'}`}>{option.text}</Text>
-                  <Text className={`font-bold ${compact ? 'text-xs' : 'text-sm'} ${hasVoted ? 'text-blue-400' : 'text-zinc-500'}`}>{displayResults ? `${pct}% (${voteCount})` : `${voteCount} ${voteCount === 1 ? 'vote' : 'votes'}`}</Text>
-                </HStack>
-              </TouchableOpacity>
-            );
-          })}
-        </VStack>
-      </VStack>
-    );
-  };
-
-// -------------------------------------------------------------------------
-  // Header & Event Details
-  // -------------------------------------------------------------------------
-  
-  // Calculate unique headcount by scanning all voters across all active and answered polls
-  const uniqueVoters = new Set<string>();
-  polls.forEach((poll) => {
-    if (poll.type === 'availability') {
-      Object.keys(poll.availabilityByUser || {}).forEach((uid) => {
-        if (Array.isArray(poll.availabilityByUser?.[uid]) && poll.availabilityByUser[uid].length > 0) uniqueVoters.add(uid);
-      });
-      return;
-    }
-    poll.options.forEach((opt: any) => {
-      opt.voterIds.forEach((uid: string) => uniqueVoters.add(uid));
-    });
-  });
-  const headcount = uniqueVoters.size;
-
-  const Header = () => (
-    <VStack className="gap-2 mb-6">
-      <Button variant="link" onPress={() => {if (router.canGoBack()) {
-          router.back(); 
-        } else {
-          router.replace('/dashboard');
-        }}} 
-        className="self-start p-0 mb-1"
-      >
-        <ButtonText className="text-blue-500">← Back</ButtonText>
-      </Button>
-
-      <HStack className="justify-between items-start w-full flex-wrap gap-4">
-        
-        {/* Title & Join Code */}
-        <VStack className={isMobile ? "w-full" : "flex-1"}>
-          <Heading size={isMobile ? '2xl' : '3xl'} className="text-zinc-50">
-            {eventData?.title}
-          </Heading>
-          
-          <HStack className="items-center gap-2 mt-2">
-            <Text className="text-zinc-400">Join Code:</Text>
-            <Box className="bg-zinc-800 px-3 py-1 rounded-md border border-zinc-700">
-              <Text className="text-zinc-50 font-mono font-bold tracking-widest">
-                {eventData?.joinCode}
-              </Text>
-            </Box>
-          </HStack>
-
-          {/* NEW: Copy Link and QR Code Buttons */}
-          <HStack className="items-center gap-4 mt-3">
-             <TouchableOpacity onPress={handleCopyLink} className="flex-row items-center gap-1.5 active:opacity-70">
-               <Text className="text-blue-400 font-semibold text-sm">Copy Share Link</Text>
-             </TouchableOpacity>
-             
-             <TouchableOpacity onPress={() => setIsQRModalOpen(true)} className="flex-row items-center gap-1.5 active:opacity-70">
-               <Text className="text-blue-400 font-semibold text-sm">Show QR Code</Text>
-             </TouchableOpacity>
-
-              {/* Native Share Button - Mobile Only */}
-              {Platform.OS !== 'web' && isMobile && (
-                <TouchableOpacity onPress={handleShare} className="flex-row items-center gap-1.5 active:opacity-70">
-                  <Text className="text-blue-400 font-semibold text-sm">Share</Text>
-                </TouchableOpacity>
-              )}
-          </HStack>
-        </VStack>
-
-        {/* Vital Signs Box (Now visible on both Mobile and Desktop) */}
-        <VStack className={`bg-zinc-800 rounded-2xl p-5 border border-zinc-700 ${isMobile ? 'w-full mt-2' : 'min-w-[240px]'}`}>
-          <Heading size="sm" className="text-zinc-400 uppercase tracking-wider mb-3">Event Details</Heading>
-          
-          <VStack className="gap-3">
-            <HStack className="justify-between gap-6 items-center">
-              <Text className="text-zinc-400 font-medium">Status</Text>
-              <Text className="text-green-400 font-bold">
-                {eventData?.status === 'voting' ? 'Active' : 'Closed'}
-              </Text>
-            </HStack>
-
-            {/* Time Row */}
-            <HStack className="justify-between gap-6 items-center">
-              <Text className="text-zinc-400 font-medium">Time</Text>
-              {!eventData?.time && isOrganizer ? (
-                <Button 
-                  size="xs" 
-                  variant="outline" 
-                  className="border-zinc-600 bg-zinc-800 h-7 px-2" 
-                  onPress={() => setIsTimeModalOpen(true)}
-                >
-                  <ButtonText className="text-zinc-300 text-xs">Poll Time</ButtonText>
-                </Button>
-              ) : (
-                <Text className="text-zinc-50 font-semibold">{eventData?.time || 'TBD'}</Text>
-              )}
-            </HStack>
-            
-            {/* Location Row */}
-            <HStack className="justify-between gap-6 items-center">
-              <Text className="text-zinc-400 font-medium">Location</Text>
-              {!eventData?.location && isOrganizer ? (
-                <Button 
-                  size="xs" 
-                  variant="outline" 
-                  className="border-zinc-600 bg-zinc-800 h-7 px-2" 
-                  onPress={() => openModal('Where we going?')}
-                >
-                  <ButtonText className="text-zinc-300 text-xs">Poll Location</ButtonText>
-                </Button>
-              ) : (
-                <Text className="text-zinc-50 font-semibold text-right max-w-[140px]" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
-                  {eventData?.location || 'TBD'}
-                </Text>
-              )}
-            </HStack>
-
-            <HStack className="justify-between gap-6 items-center">
-              <Text className="text-zinc-400 font-medium">Going</Text>
-              <Text className="text-zinc-50 font-semibold">
-                {headcount} {headcount === 1 ? 'person' : 'people'}
-              </Text>
-            </HStack>
-          </VStack>
-        </VStack>
-
-      </HStack>
-    </VStack>
-  );
-
-  // -------------------------------------------------------------------------
-  // Mobile Layout
-  // -------------------------------------------------------------------------
-  if (isMobile) {
-    return (
-      <Box className="flex-1 bg-zinc-900">
-        <View className="flex-1 px-4 pt-8">
-          <Header />
-
-          {/* Tab bar (Reduced to 2 tabs) */}
-          <HStack className="bg-zinc-800 rounded-xl p-1 mb-4 border border-zinc-700">
-            {(['active', 'answered'] as const).map((tab) => {
-              const label = tab === 'active' ? 'Active' : `Answered / Results`;
-              return (
-                <TouchableOpacity
-                  key={tab}
-                  onPress={() => setActiveTab(tab)}
-                  className={`flex-1 py-2 rounded-lg items-center ${activeTab === tab ? 'bg-zinc-600' : ''}`}
-                >
-                  <Text className={`text-sm font-semibold ${activeTab === tab ? 'text-zinc-50' : 'text-zinc-400'}`}>
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </HStack>
-
-          {/* Add Poll Button (Moved below tabs for Organizer) */}
-          {isOrganizer && activeTab === 'active' && (
-            <Button size="md" action="primary" className="bg-blue-600 border-0 mb-4" onPress={() => setIsModalOpen(true)}>
-              <ButtonText className="font-bold text-white">+ Create Poll</ButtonText>
-            </Button>
-          )}
-
-          <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-            <VStack className="gap-4 pb-12">
-              {activeTab === 'active' && (
-                activePolls.length === 0 ? (
-                  <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed">
-                    <Text className="text-zinc-500">You're all caught up!</Text>
-                  </Box>
-                ) : (
-                  activePolls.map((poll) => <PollCard key={poll.id} poll={poll} deletable={isOrganizer} />)
-                )
-              )}
-
-              {activeTab === 'answered' && (
-                answeredPolls.length === 0 ? (
-                  <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed">
-                    <Text className="text-zinc-500">No answered polls yet.</Text>
-                  </Box>
-                ) : (
-                  // showResults=true embeds the visual progress bars inside the Answered cards
-                  answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults deletable={isOrganizer} />)
-                )
-              )}
-            </VStack>
-          </ScrollView>
-        </View>
-
-        {/* --- ADD THE QR MODAL HERE FOR MOBILE --- */}
-        <Modal visible={isQRModalOpen} animationType="fade" transparent>
-          <View className="flex-1 justify-center items-center p-4">
-            <Pressable
-              className="absolute top-0 bottom-0 left-0 right-0 bg-black/80"
-              onPress={() => setIsQRModalOpen(false)}
-            />
-            <View className="bg-zinc-900 rounded-3xl p-8 border border-zinc-800 items-center shadow-2xl z-10 w-full max-w-[320px]">
-              <Heading size="xl" className="text-zinc-50 mb-1 text-center">Scan to Join</Heading>
-              <Text className="text-zinc-400 mb-8 text-center" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
-                {eventData?.title}
-              </Text>
-              
-              <View className="bg-white p-4 rounded-2xl mb-6 min-h-[232px] min-w-[232px] justify-center items-center">
-                 {joinLink ? (
-                   <QRCode 
-                     value={joinLink} 
-                     size={200} 
-                     backgroundColor="white"
-                     color="black"
-                   />
-                 ) : (
-                   <Text className="text-zinc-400">Loading QR...</Text>
-                 )}
-              </View>
-
-              <Text className="text-zinc-500 font-mono tracking-widest font-bold mb-6">
-                CODE: {eventData?.joinCode}
-              </Text>
-
-              <Button
-                size="md"
-                variant="outline"
-                className="border-zinc-700 w-full bg-zinc-800"
-                onPress={() => setIsQRModalOpen(false)}
-              >
-                <ButtonText className="text-zinc-300 font-bold">Close</ButtonText>
-              </Button>
-            </View>
-          </View>
-        </Modal>
-
-        <PollModal visible={isModalOpen} eventId={id as string} onClose={() => setIsModalOpen(false)} />
-        <TimeAvailabilityModal visible={isTimeModalOpen} eventId={id as string} onClose={() => setIsTimeModalOpen(false)} />
-        <AvailabilityPickerModal visible={isAvailabilityModalOpen} poll={availabilityPoll} currentUid={currentUid} onClose={() => setIsAvailabilityModalOpen(false)} onSave={handleSaveAvailability} />
-      </Box>
-    );
-  }
-
-  // -------------------------------------------------------------------------
-  // Desktop Layout (2 Columns: Active | Answered & Results)
-  // -------------------------------------------------------------------------
   return (
     <Box className="flex-1 bg-zinc-900 items-center">
-      {/* Reduced to max-w-5xl since we only have 2 columns now */}
-      <View className="w-full max-w-5xl flex-1 px-6 pt-6">
-        <Header />
-
-        {/* 2-column grid */}
-        <View className="flex-1 flex-col md:flex-row gap-8 w-full pb-6">
-
-          {/* LEFT: Active Polls */}
-          <View className="flex-1">
-            <HStack className="justify-between items-end mb-4 mt-1">
-              <Heading size="xl" className="text-zinc-50">Active</Heading>
-              {isOrganizer && (
-                <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => setIsModalOpen(true)}>
-                  <ButtonText className="font-bold text-white">+ New Poll</ButtonText>
-                </Button>
-              )}
-            </HStack>
-            
-            <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-              <VStack className="gap-4 pb-12">
-                {activePolls.length === 0 ? (
-                  <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed">
-                    <Text className="text-zinc-500">You're all caught up!</Text>
-                  </Box>
-                ) : (
-                  activePolls.map((poll) => <PollCard key={poll.id} poll={poll} deletable={isOrganizer} />)
-                )}
-              </VStack>
-            </ScrollView>
-          </View>
-
-          {/* RIGHT: Answered / Results */}
-          <View className="flex-1">
-            <Heading size="xl" className="text-zinc-50 mb-4 mt-1">Answered / Results</Heading>
-            
-            <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-              <VStack className="gap-4 pb-12">
-                {answeredPolls.length === 0 ? (
-                  <Box className="bg-zinc-800/50 rounded-xl p-6 border border-zinc-700/50 items-center border-dashed">
-                    <Text className="text-zinc-500">No answered polls yet.</Text>
-                  </Box>
-                ) : (
-                  // showResults=true embeds the visual progress bars inside the Answered cards
-                  answeredPolls.map((poll) => <PollCard key={poll.id} poll={poll} compact showResults deletable={isOrganizer}/>)
-                )}
-              </VStack>
-            </ScrollView>
-          </View>
-
-        </View>
-      </View>
-      
-      {/* QR Code Modal */}
-      <Modal visible={isQRModalOpen} animationType="fade" transparent>
-        <View className="flex-1 justify-center items-center p-4">
-          <Pressable
-            className="absolute top-0 bottom-0 left-0 right-0 bg-black/80"
-            onPress={() => setIsQRModalOpen(false)}
+      <View className={`flex-1 w-full ${isMobile ? 'px-4' : 'max-w-5xl px-6 pt-6'}`}>
+        
+        {/* --- DESKTOP HEADER --- */}
+        {!isMobile && (
+          <EventHeader 
+            eventData={eventData} 
+            headcount={headcount} 
+            isMobile={isMobile} 
+            isOrganizer={isOrganizer} 
+            joinLink={joinLink}
+            timeQuickPoll={timeQuickPoll}
+            locationQuickPoll={locationQuickPoll}
+            isQuickPollExpired={isPollExpired}
+            getQuickPollWinner={getWinningOption}
+            onBack={() => router.canGoBack() ? router.back() : router.replace('/dashboard')}
+            onShowQR={() => {
+              trackEvent('qr_modal_opened', { event_id: id as string });
+              setIsQRModalOpen(true);
+            }}
+            onOpenModal={(question, linkedField) => openModal(question, ['', ''], linkedField)}
+            onShowParticipants={() => {
+              trackEvent('participants_modal_opened', { event_id: id as string });
+              setIsParticipantsModalOpen(true);
+            }}
+            onEditEvent={() => {
+              trackEvent('event_edit_started', { event_id: id as string });
+              router.push(`/edit/${id as string}`);
+            }}
           />
-          <View className="bg-zinc-900 rounded-3xl p-8 border border-zinc-800 items-center shadow-2xl z-10 w-full max-w-[320px]">
-            <Heading size="xl" className="text-zinc-50 mb-1 text-center">Scan to Join</Heading>
-            <Text className="text-zinc-400 mb-8 text-center" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
-              {eventData?.title}
-            </Text>
-            
-            <View className="bg-white p-4 rounded-2xl mb-6 min-h-[232px] min-w-[232px] justify-center items-center">
-               {/* Only render when joinLink is absolutely ready */}
-               {joinLink ? (
-                 <QRCode 
-                   value={joinLink} 
-                   size={200} 
-                   backgroundColor="white"
-                   color="black"
-                 />
-               ) : (
-                 <Text className="text-zinc-400">Loading QR...</Text>
-               )}
+        )}
+
+        {isMobile ? (
+          <>
+            {/* --- NEW COMPACT MOBILE HEADER --- */}
+            <VStack className="gap-4 mb-4">
+              
+              {/* Back Button */}
+              <Button variant="link" className="self-start p-0 -ml-2" onPress={() => router.canGoBack() ? router.back() : router.replace('/dashboard')}>
+                <ButtonText className="text-blue-500">? Dashboard</ButtonText>
+              </Button>
+
+              {/* Title & Code on One Line */}
+              <HStack className="justify-between items-center gap-4">
+                <Heading size="2xl" className="text-zinc-50 flex-1" numberOfLines={1}>{eventData?.title}</Heading>
+                <TouchableOpacity activeOpacity={0.7} onPress={handleCopyCode}>
+                  <Box className="bg-zinc-800 px-3 py-1.5 rounded-lg border border-zinc-700">
+                    <Text className="text-zinc-300 font-mono text-sm font-bold tracking-widest">Join Code: {eventData?.joinCode || id}</Text>
+                  </Box>
+                </TouchableOpacity>
+              </HStack>
+
+              {/* Share Options */}
+              <HStack className="gap-3">
+                <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={() => {
+                  trackEvent('qr_modal_opened', { event_id: id as string });
+                  setIsQRModalOpen(true);
+                }}>
+                  <QrCode size={16} color="#f4f4f5" />
+                  <ButtonText className="text-zinc-50 font-bold">QR Code</ButtonText>
+                </Button>
+                <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={handleNativeShare}>
+                  <ShareIcon size={16} color="#f4f4f5" />
+                  <ButtonText className="text-zinc-50 font-bold">Share Link</ButtonText>
+                </Button>
+              </HStack>
+            </VStack>
+
+            {/* --- TABS --- */}
+            <HStack className="bg-zinc-800 rounded-xl p-1 mb-4 border border-zinc-700">
+              {MOBILE_EVENT_TABS.map((tab) => (
+                <TouchableOpacity key={tab} onPress={() => setActiveTab(tab)} className={`flex-1 py-2 rounded-lg items-center ${activeTab === tab ? 'bg-zinc-600' : ''}`}>
+                  <Text className={`text-xs font-semibold ${activeTab === tab ? 'text-zinc-50' : 'text-zinc-400'}`}>
+                    {tab === 'details' ? 'Details' : tab === 'active' ? 'Active' : 'Results'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </HStack>
+
+            {/* --- CREATE BUTTON (Only on Active tab) --- */}
+            {isOrganizer && !eventEnded && activeTab === 'active' && (
+              <View className="mb-4">
+                {renderCreateActions(true)}
+              </View>
+            )}
+
+            {/* --- TAB CONTENT --- */}
+            <View
+              className="flex-1 overflow-hidden"
+              onLayout={(event) => {
+                const nextWidth = Math.round(event.nativeEvent.layout.width);
+                if (!nextWidth || nextWidth === mobileTabWidth) return;
+                setMobileTabWidth(nextWidth);
+              }}
+              {...mobileTabPanResponder.panHandlers}
+            >
+              <Animated.View
+                className="flex-1 flex-row"
+                style={{
+                  width: (mobileTabWidth || Math.max(width - 32, 1)) * MOBILE_EVENT_TABS.length,
+                  transform: [{ translateX: mobileTabOffset }],
+                }}
+              >
+                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
+                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                    <VStack className="gap-4 pb-12">
+                      {renderDetailsTab()}
+                    </VStack>
+                  </ScrollView>
+                </View>
+
+                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
+                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                    <VStack className="gap-4 pb-12">
+                      {renderActiveTab()}
+                    </VStack>
+                  </ScrollView>
+                </View>
+
+                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
+                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                    <VStack className="gap-4 pb-12">
+                      {renderAnsweredTab()}
+                    </VStack>
+                  </ScrollView>
+                </View>
+              </Animated.View>
+            </View>
+          </>
+        ) : (
+          /* --- DESKTOP VIEW --- */
+          <View className="flex-1 flex-col md:flex-row gap-8 w-full pb-6">
+            <View className="flex-1">
+              <HStack className="justify-between items-end mb-4 mt-1">
+                <Heading size="xl" className="text-zinc-50">Active</Heading>
+                {isOrganizer && !eventEnded && (
+                  renderCreateActions()
+                )}
+              </HStack>
+              <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                <VStack className="gap-4 pb-12">
+                  {activePolls.length === 0 ? (
+                    <EmptyState message="You're all caught up!" />
+                  ) : (
+                    activePolls.map((poll) => renderPollItem(poll))
+                  )}
+                </VStack>
+              </ScrollView>
             </View>
 
-            <Text className="text-zinc-500 font-mono tracking-widest font-bold mb-6">
-              CODE: {eventData?.joinCode}
-            </Text>
-
-            <Button
-              size="md"
-              variant="outline"
-              className="border-zinc-700 w-full bg-zinc-800"
-              onPress={() => setIsQRModalOpen(false)}
-            >
-              <ButtonText className="text-zinc-300 font-bold">Close</ButtonText>
-            </Button>
+            <View className="flex-1">
+              <Heading size="xl" className="text-zinc-50 mb-4 mt-1">Answered / Results</Heading>
+              <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                <VStack className="gap-4 pb-12">
+                  {answeredPolls.length === 0 ? (
+                    <EmptyState message="No answered polls yet." />
+                  ) : (
+                    answeredPolls.map((poll) => renderPollItem(poll, true))
+                  )}
+                </VStack>
+              </ScrollView>
+            </View>
           </View>
-        </View>
-      </Modal>
+        )}
+      </View>
 
-      <PollModal 
-        visible={isModalOpen} 
-        eventId={id as string} 
-        onClose={() => setIsModalOpen(false)} 
-        initialQuestion={modalConfig.question}
-        initialChoices={modalConfig.choices}
+      <QRModal visible={isQRModalOpen} onClose={() => setIsQRModalOpen(false)} eventData={eventData} joinLink={joinLink} />
+      <PollModal visible={isModalOpen} eventId={id as string} onClose={closePollModal} initialQuestion={modalConfig.question} initialChoices={modalConfig.choices} pollIdToEdit={modalConfig.pollIdToEdit} linkedField={modalConfig.linkedField} />
+      <TimeAvailabilityModal visible={isTimeAvailabilityModalOpen} eventId={id as string} onClose={() => setIsTimeAvailabilityModalOpen(false)} />
+      <AvailabilityPickerModal
+        visible={isAvailabilityPickerOpen}
+        poll={availabilityPoll}
+        currentUid={currentUid}
+        onClose={() => {
+          setIsAvailabilityPickerOpen(false);
+          setAvailabilityPoll(null);
+        }}
+        onSave={handleSaveAvailability}
       />
-      <TimeAvailabilityModal visible={isTimeModalOpen} eventId={id as string} onClose={() => setIsTimeModalOpen(false)} />
-      <AvailabilityPickerModal visible={isAvailabilityModalOpen} poll={availabilityPoll} currentUid={currentUid} onClose={() => setIsAvailabilityModalOpen(false)} onSave={handleSaveAvailability} />
+      <PollActionModal 
+        isOpen={!!actionPoll} 
+        poll={actionPoll} 
+        onClose={() => setActionPoll(null)} 
+        onDelete={handleDeletePoll}
+        onEndEarly={handleEndPollEarly}
+        onEdit={handleEditPoll}
+        onRerun={handleRerunPoll}
+        onNudge={handleNudge}
+      />
+      <ParticipantsModal
+        visible={isParticipantsModalOpen}
+        onClose={() => setIsParticipantsModalOpen(false)}
+        participantIds={participantIds}
+        roleAssignments={roleAssignments}
+        organizerId={eventData?.organizerId}
+        eventId={id as string}
+      />
     </Box>
   );
 }

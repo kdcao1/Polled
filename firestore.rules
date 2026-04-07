@@ -74,7 +74,9 @@ service cloud.firestore {
     }
 
     match /joinCodes/{code} {
-      allow read: if signedIn() && eventExists(resource.data.eventId) && canJoinEvent(resource.data.eventId);
+      // Client-side event creation checks random codes for uniqueness before reserving one.
+      // Tight join-code secrecy needs a backend resolver; signed-in reads keep creation working for now.
+      allow read: if signedIn();
       allow create: if signedIn();
       allow delete: if signedIn();
       allow update: if false;
@@ -93,7 +95,8 @@ service cloud.firestore {
             'endedAt',
             'time',
             'location',
-            'scheduledAt'
+            'scheduledAt',
+            'identityRequirement'
           ])
         );
 
