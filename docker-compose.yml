@@ -1,8 +1,14 @@
 services:
   polled-web:
+    container_name: polled
     build:
       context: .
       dockerfile: Dockerfile
     ports:
       - "8080:80"
     restart: unless-stopped
+    
+networks:
+  default:
+    external: true
+    name: serverout
