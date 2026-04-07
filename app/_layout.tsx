@@ -73,18 +73,15 @@ export default function RootLayout() {
         // 3. IF LOGGED IN (Check for Profile)
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         const hasName = userDoc.exists() && userDoc.data().displayName;
+        const isAnonymousUser = user.isAnonymous;
 
         if (hasName) {
           if (isPublicRoute || inOnboardingScreen) {
             router.replace('/dashboard');
           }
         } else {
-          if (inIndexScreen || inLoginScreen) {
-            router.replace('/dashboard');
-            return;
-          }
-
-          if (isIntentionalAction) {
+          // Let anonymous / not-yet-onboarded users stay on the landing and login screens.
+          if (isIntentionalAction || (!isAnonymousUser && !isPublicRoute && !inOnboardingScreen)) {
             router.replace(`/onboarding?next=${encodedPath}`);
           }
         }
