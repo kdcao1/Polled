@@ -389,7 +389,7 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
           </HStack>
 
           {isMobilePicker ? (
-            <VStack className="flex-1 min-h-0 gap-4">
+            <VStack className="gap-4">
               {currentDateKey ? (
                 <VStack className="items-center gap-1">
                   <Text className="text-zinc-50 font-semibold">{formatDateLabel(currentDateKey)}</Text>
@@ -399,7 +399,13 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
                 </VStack>
               ) : null}
 
-              <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 4 }} showsVerticalScrollIndicator={false} scrollEnabled={!isDragging}>
+              <ScrollView
+                className="w-full"
+                style={{ maxHeight: 340 }}
+                contentContainerStyle={{ paddingBottom: 4 }}
+                showsVerticalScrollIndicator={false}
+                scrollEnabled={!isDragging}
+              >
                 <View
                   className="pb-1"
                   onMoveShouldSetResponder={() => isDragging}
@@ -564,7 +570,7 @@ function AvailabilityPollCard({
   const topSlots = getTopAvailabilitySlots(poll, 3);
   const startHour = typeof poll.startHour === 'number' ? poll.startHour : 8;
   const endHour = typeof poll.endHour === 'number' ? poll.endHour : 20;
-  const shouldShowGrid = showResults || currentSelections.length > 0 || eventEnded;
+  const shouldShowGrid = !showResults && (currentSelections.length > 0 || eventEnded);
 
   return (
     <VStack className={`bg-zinc-800 rounded-xl border border-zinc-700 ${compact ? 'p-4 gap-3' : 'p-5 gap-4'}`}>

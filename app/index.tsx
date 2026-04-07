@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -7,9 +7,51 @@ import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter } from 'expo-router';
 import { trackEvent } from '@/utils/analytics';
+import { ActivityIndicator, Platform } from 'react-native';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '@/config/firebaseConfig';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function LandingScreen() {
   const router = useRouter();
+  const { user, isLoading: isAuthLoading } = useAuth();
+  const [isProfileChecking, setIsProfileChecking] = useState(Platform.OS !== 'web');
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (isAuthLoading) return;
+
+    const checkProfile = async () => {
+      if (!user) {
+        setIsProfileChecking(false);
+        return;
+      }
+
+      try {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        const hasName = userDoc.exists() && !!userDoc.data().displayName;
+
+        if (hasName) {
+          router.replace('/dashboard');
+          return;
+        }
+      } catch (error) {
+        console.error('Error checking landing profile:', error);
+      }
+
+      setIsProfileChecking(false);
+    };
+
+    void checkProfile();
+  }, [user, isAuthLoading, router]);
+
+  if (Platform.OS !== 'web' && (isAuthLoading || isProfileChecking)) {
+    return (
+      <Box className="flex-1 bg-zinc-900 items-center justify-center">
+        <ActivityIndicator size="large" color="#3b82f6" />
+      </Box>
+    );
+  }
 
   return (
     <Box className="flex-1 bg-zinc-900 items-center justify-center px-8">
