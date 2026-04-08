@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { app } from '@/config/firebaseConfig';
+import { app, auth } from '@/config/firebaseConfig';
+import { analyticsConfig } from '@/config/env';
 
 type AnalyticsParams = Record<string, string | number | boolean | null | undefined>;
 type GtagFunction = (...args: any[]) => void;
@@ -14,6 +15,10 @@ type StoredAnalyticsRecord = {
   delivery: 'pending' | 'sent' | 'local_only' | 'failed';
   failureReason?: string;
 };
+type StoredJourney = {
+  startedAt: number;
+  params: Record<string, string | number>;
+};
 
 let analyticsPromise: Promise<any | null> | null = null;
 let debugModeConfigured = false;
@@ -21,6 +26,9 @@ let persistQueue: Promise<void> = Promise.resolve();
 
 const LOCAL_ANALYTICS_STORAGE_KEY = 'polled_local_analytics_events';
 const MAX_LOCAL_ANALYTICS_EVENTS = 500;
+const JOURNEY_STORAGE_PREFIX = 'polled_analytics_journey:';
+const FLAG_STORAGE_PREFIX = 'polled_analytics_flag:';
+const COUNTER_STORAGE_PREFIX = 'polled_analytics_counter:';
 
 const isDebugAnalyticsEnabled = () => {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
@@ -86,6 +94,46 @@ const getAnalyticsInstance = async () => {
   return analyticsPromise;
 };
 
+const isServerAnalyticsEnabled = () => Boolean(analyticsConfig.ingestUrl);
+
+const sendAnalyticsToServer = async (
+  kind: StoredAnalyticsRecord['kind'],
+  name: string,
+  params: Record<string, string | number>
+) => {
+  const ingestUrl = analyticsConfig.ingestUrl;
+  if (!ingestUrl) return { attempted: false, sent: false };
+
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('missing_auth_session');
+  }
+
+  const authToken = await currentUser.getIdToken();
+
+  const response = await fetch(ingestUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${authToken}`,
+    },
+    body: JSON.stringify({
+      kind,
+      name,
+      params,
+      clientCreatedAt: new Date().toISOString(),
+      platform: Platform.OS,
+    }),
+  });
+
+  if (!response.ok) {
+    const responseText = await response.text().catch(() => '');
+    throw new Error(responseText || `analytics-ingest-${response.status}`);
+  }
+
+  return { attempted: true, sent: true };
+};
+
 const readLocalAnalyticsRecords = async (): Promise<StoredAnalyticsRecord[]> => {
   try {
     const raw = await AsyncStorage.getItem(LOCAL_ANALYTICS_STORAGE_KEY);
@@ -117,6 +165,24 @@ const queueLocalAnalyticsWrite = async (record: StoredAnalyticsRecord) => {
   });
 
   await persistQueue;
+};
+
+const queueStorageWrite = async (work: () => Promise<void>) => {
+  persistQueue = persistQueue.then(work);
+  await persistQueue;
+};
+
+const getScopedStorageKey = (prefix: string, key: string) => `${prefix}${key}`;
+
+const readStoredJson = async <T>(storageKey: string): Promise<T | null> => {
+  try {
+    const raw = await AsyncStorage.getItem(storageKey);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    console.error(`Analytics storage read failed for ${storageKey}:`, error);
+    return null;
+  }
 };
 
 const buildAnalyticsRecord = (
@@ -151,19 +217,46 @@ const recordAnalytics = async (
   logDebugAnalytics(name, finalParams, kind);
 
   try {
+    const serverDelivery = await sendAnalyticsToServer(kind, name, finalParams);
+
     const analytics = await getAnalyticsInstance();
-    if (!analytics) {
-      await queueLocalAnalyticsWrite(buildAnalyticsRecord(kind, name, finalParams, 'local_only'));
+    if (analytics) {
+      try {
+        const { logEvent } = await import('firebase/analytics');
+        await logEvent(analytics, name, finalParams);
+      } catch (mirrorError) {
+        console.error(`Analytics GA mirror failed: ${name}`, mirrorError);
+      }
+    }
+
+    if (serverDelivery.sent) {
+      await queueLocalAnalyticsWrite(buildAnalyticsRecord(kind, name, finalParams, 'sent'));
       return;
     }
 
-    const { logEvent } = await import('firebase/analytics');
-    await logEvent(analytics, name, finalParams);
-    await queueLocalAnalyticsWrite(buildAnalyticsRecord(kind, name, finalParams, 'sent'));
+    await queueLocalAnalyticsWrite(
+      buildAnalyticsRecord(
+        kind,
+        name,
+        finalParams,
+        isServerAnalyticsEnabled() ? 'failed' : 'local_only',
+        isServerAnalyticsEnabled() ? 'server_analytics_unavailable' : undefined
+      )
+    );
   } catch (error) {
     console.error(`Analytics ${kind} failed: ${name}`, error);
     const failureReason = error instanceof Error ? error.message : 'unknown_error';
-    await queueLocalAnalyticsWrite(buildAnalyticsRecord(kind, name, finalParams, 'failed', failureReason));
+
+    if (!isServerAnalyticsEnabled()) {
+      await queueLocalAnalyticsWrite(
+        buildAnalyticsRecord(kind, name, finalParams, 'local_only', failureReason)
+      );
+      return;
+    }
+
+    await queueLocalAnalyticsWrite(
+      buildAnalyticsRecord(kind, name, finalParams, 'failed', failureReason)
+    );
   }
 };
 
@@ -194,4 +287,156 @@ export const clearLocalAnalyticsEvents = async () => {
   } catch (error) {
     console.error('Analytics local cache clear failed:', error);
   }
+};
+
+export const startAnalyticsJourney = async (
+  key: string,
+  params: AnalyticsParams = {},
+  options?: { overwrite?: boolean }
+) => {
+  const storageKey = getScopedStorageKey(JOURNEY_STORAGE_PREFIX, key);
+  const overwrite = options?.overwrite ?? true;
+
+  if (!overwrite) {
+    const existing = await readStoredJson<StoredJourney>(storageKey);
+    if (existing) return existing;
+  }
+
+  const journey: StoredJourney = {
+    startedAt: Date.now(),
+    params: sanitizeParams(params),
+  };
+
+  await queueStorageWrite(async () => {
+    try {
+      await AsyncStorage.setItem(storageKey, JSON.stringify(journey));
+    } catch (error) {
+      console.error(`Analytics journey start failed for ${key}:`, error);
+    }
+  });
+
+  return journey;
+};
+
+export const ensureAnalyticsJourneyStarted = async (key: string, params: AnalyticsParams = {}) =>
+  startAnalyticsJourney(key, params, { overwrite: false });
+
+export const continueAnalyticsJourney = async (
+  sourceKey: string,
+  targetKey: string,
+  params: AnalyticsParams = {}
+) => {
+  const sourceStorageKey = getScopedStorageKey(JOURNEY_STORAGE_PREFIX, sourceKey);
+  const sourceJourney = await readStoredJson<StoredJourney>(sourceStorageKey);
+  if (!sourceJourney) {
+    return startAnalyticsJourney(targetKey, params, { overwrite: true });
+  }
+
+  const targetJourney: StoredJourney = {
+    startedAt: sourceJourney.startedAt,
+    params: {
+      ...sourceJourney.params,
+      ...sanitizeParams(params),
+    },
+  };
+
+  await queueStorageWrite(async () => {
+    try {
+      await AsyncStorage.multiSet([
+        [getScopedStorageKey(JOURNEY_STORAGE_PREFIX, targetKey), JSON.stringify(targetJourney)],
+      ]);
+      await AsyncStorage.removeItem(sourceStorageKey);
+    } catch (error) {
+      console.error(`Analytics journey continue failed from ${sourceKey} to ${targetKey}:`, error);
+    }
+  });
+
+  return targetJourney;
+};
+
+export const clearAnalyticsJourney = async (key: string) => {
+  try {
+    await AsyncStorage.removeItem(getScopedStorageKey(JOURNEY_STORAGE_PREFIX, key));
+  } catch (error) {
+    console.error(`Analytics journey clear failed for ${key}:`, error);
+  }
+};
+
+export const completeAnalyticsJourney = async (
+  key: string,
+  eventName: string,
+  params: AnalyticsParams = {}
+) => {
+  const storageKey = getScopedStorageKey(JOURNEY_STORAGE_PREFIX, key);
+  const journey = await readStoredJson<StoredJourney>(storageKey);
+  if (!journey) return null;
+
+  const durationSeconds = Number(((Date.now() - journey.startedAt) / 1000).toFixed(2));
+
+  await trackEvent(eventName, {
+    ...journey.params,
+    ...params,
+    duration_seconds: durationSeconds,
+  });
+  await clearAnalyticsJourney(key);
+  return durationSeconds;
+};
+
+export const abandonAnalyticsJourney = async (
+  key: string,
+  node: string,
+  params: AnalyticsParams = {}
+) => {
+  const storageKey = getScopedStorageKey(JOURNEY_STORAGE_PREFIX, key);
+  const journey = await readStoredJson<StoredJourney>(storageKey);
+  if (!journey) return false;
+
+  const durationSeconds = Number(((Date.now() - journey.startedAt) / 1000).toFixed(2));
+  await trackEvent('abandonment_node', {
+    ...journey.params,
+    ...params,
+    node,
+    duration_seconds: durationSeconds,
+  });
+  await clearAnalyticsJourney(key);
+  return true;
+};
+
+export const trackEventOnce = async (
+  key: string,
+  eventName: string,
+  params: AnalyticsParams = {}
+) => {
+  const storageKey = getScopedStorageKey(FLAG_STORAGE_PREFIX, key);
+  const alreadyTracked = await AsyncStorage.getItem(storageKey);
+  if (alreadyTracked) return false;
+
+  await trackEvent(eventName, params);
+
+  await queueStorageWrite(async () => {
+    try {
+      await AsyncStorage.setItem(storageKey, '1');
+    } catch (error) {
+      console.error(`Analytics event-once flag failed for ${key}:`, error);
+    }
+  });
+
+  return true;
+};
+
+export const incrementAnalyticsCounter = async (key: string) => {
+  const storageKey = getScopedStorageKey(COUNTER_STORAGE_PREFIX, key);
+  const currentRaw = await AsyncStorage.getItem(storageKey);
+  const currentValue = currentRaw ? Number.parseInt(currentRaw, 10) || 0 : 0;
+  const nextValue = currentValue + 1;
+
+  await queueStorageWrite(async () => {
+    try {
+      await AsyncStorage.setItem(storageKey, String(nextValue));
+    } catch (error) {
+      console.error(`Analytics counter increment failed for ${key}:`, error);
+    }
+  });
+
+  return nextValue;
 };

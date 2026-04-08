@@ -8,6 +8,9 @@ services:
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
       NOTIFICATION_WORKER_POLL_MS: "5000"
       NOTIFICATION_WORKER_BATCH_SIZE: "10"
+      ANALYTICS_HTTP_PORT: "8787"
+      ANALYTICS_SQLITE_PATH: /app/data/analytics.sqlite
     volumes:
       - /absolute/path/on/host/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+      - ./data:/app/data
     restart: unless-stopped

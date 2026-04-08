@@ -1,7 +1,7 @@
 import { collection, doc, getDoc, setDoc, serverTimestamp, arrayUnion, writeBatch } from 'firebase/firestore';
 import { db, auth } from '../config/firebaseConfig';
 import { useRouter } from 'expo-router';
-import { trackEvent } from '@/utils/analytics';
+import { completeAnalyticsJourney, trackEvent } from '@/utils/analytics';
 
 // Increased to 8 characters for better security
 const generateCode = () => {
@@ -76,6 +76,10 @@ export const useEvents = () => {
       trackEvent('event_created', {
         event_id: secureEventId,
         title_length: title.trim().length,
+      });
+      await completeAnalyticsJourney('event_creation_flow', 'time_to_creation_measured', {
+        event_id: secureEventId,
+        join_code_length: newJoinCode.length,
       });
 
       // 5. Route to the secure URL using REPLACE so the form is cleared from history

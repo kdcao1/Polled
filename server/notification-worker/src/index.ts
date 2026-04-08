@@ -1,3 +1,7 @@
+import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import {
   AppOptions,
@@ -6,6 +10,7 @@ import {
   cert,
   initializeApp,
 } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import {
   CollectionReference,
   DocumentReference,
@@ -29,6 +34,7 @@ const expo = new Expo();
 
 const POLL_INTERVAL_MS = Number(process.env.NOTIFICATION_WORKER_POLL_MS ?? 5000);
 const MAX_JOBS_PER_POLL = Number(process.env.NOTIFICATION_WORKER_BATCH_SIZE ?? 10);
+const ANALYTICS_HTTP_PORT = Number(process.env.ANALYTICS_HTTP_PORT ?? 8787);
 
 type NotificationJobType =
   | 'poll_created'
@@ -62,6 +68,25 @@ type UserPrivateData = {
   expoPushToken?: string;
 };
 
+type AnalyticsEvent = {
+  authProvider?: string;
+  clientCreatedAt?: string | null;
+  ingestedAt?: FieldValue;
+  kind: 'event' | 'screen_view';
+  name: string;
+  params: Record<string, string | number>;
+  platform?: string | null;
+  uid?: string | null;
+};
+
+type AnalyticsIngestPayload = {
+  clientCreatedAt?: unknown;
+  kind?: unknown;
+  name?: unknown;
+  params?: unknown;
+  platform?: unknown;
+};
+
 const ALLOWED_JOB_TYPES = new Set<NotificationJobType>([
   'poll_created',
   'role_created',
@@ -70,6 +95,23 @@ const ALLOWED_JOB_TYPES = new Set<NotificationJobType>([
 ]);
 
 let isPolling = false;
+
+const ANALYTICS_SQLITE_PATH = resolve(
+  process.env.ANALYTICS_SQLITE_PATH?.trim() || './data/analytics.sqlite'
+);
+const analyticsDb = initializeAnalyticsDatabase(ANALYTICS_SQLITE_PATH);
+const insertAnalyticsEvent = analyticsDb.prepare(`
+  INSERT INTO analytics_events (
+    uid,
+    auth_provider,
+    kind,
+    name,
+    params_json,
+    client_created_at,
+    ingested_at,
+    platform
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
 
 function buildFirebaseAdminOptions(): AppOptions {
   const options: AppOptions = {};
@@ -116,6 +158,7 @@ async function main() {
     `[worker] starting notification worker for project=${adminOptions.projectId ?? 'unknown'} poll=${POLL_INTERVAL_MS}ms batch=${MAX_JOBS_PER_POLL}`
   );
 
+  startHttpServer();
   await pollOnce();
 
   setInterval(() => {
@@ -148,6 +191,202 @@ async function pollOnce() {
 
 function queuedJobsCollection(firestore: Firestore) {
   return firestore.collection('notificationJobs') as CollectionReference<NotificationJob>;
+}
+
+function initializeAnalyticsDatabase(databasePath: string) {
+  mkdirSync(dirname(databasePath), { recursive: true });
+  const database = new DatabaseSync(databasePath);
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS analytics_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uid TEXT,
+      auth_provider TEXT,
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL,
+      params_json TEXT NOT NULL,
+      client_created_at TEXT,
+      ingested_at TEXT NOT NULL,
+      platform TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_analytics_events_ingested_at
+      ON analytics_events (ingested_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_analytics_events_name
+      ON analytics_events (name);
+  `);
+
+  return database;
+}
+
+function sendJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(body));
+}
+
+function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
+  const origin = req.headers.origin?.trim();
+  res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS, GET');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  if (chunks.length === 0) {
+    return {};
+  }
+
+  const rawBody = Buffer.concat(chunks).toString('utf8').trim();
+  if (!rawBody) {
+    return {};
+  }
+
+  return JSON.parse(rawBody);
+}
+
+function normalizeAnalyticsParams(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).flatMap(([key, entryValue]) => {
+      if (typeof entryValue === 'string' || typeof entryValue === 'number') {
+        return [[key, entryValue]];
+      }
+
+      if (typeof entryValue === 'boolean') {
+        return [[key, entryValue ? 'true' : 'false']];
+      }
+
+      return [];
+    })
+  ) as Record<string, string | number>;
+}
+
+function normalizeAnalyticsPayload(rawBody: unknown): AnalyticsEvent | null {
+  if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+    return null;
+  }
+
+  const payload = rawBody as AnalyticsIngestPayload;
+  const kind = payload.kind === 'event' || payload.kind === 'screen_view' ? payload.kind : null;
+  const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+
+  if (!kind || !name) {
+    return null;
+  }
+
+  return {
+    kind,
+    name,
+    params: normalizeAnalyticsParams(payload.params),
+    clientCreatedAt:
+      typeof payload.clientCreatedAt === 'string' ? payload.clientCreatedAt : null,
+    platform: typeof payload.platform === 'string' ? payload.platform : null,
+  };
+}
+
+async function verifyAnalyticsAuthToken(req: IncomingMessage) {
+  const rawAuthorization = req.headers.authorization?.trim() ?? '';
+  if (!rawAuthorization.startsWith('Bearer ')) {
+    throw new Error('missing-bearer-token');
+  }
+
+  const token = rawAuthorization.slice('Bearer '.length).trim();
+  if (!token) {
+    throw new Error('missing-bearer-token');
+  }
+
+  return getAuth(adminApp).verifyIdToken(token);
+}
+
+async function handleAnalyticsIngest(req: IncomingMessage, res: ServerResponse) {
+  try {
+    const decodedToken = await verifyAnalyticsAuthToken(req);
+    const requestBody = await readJsonBody(req);
+    const event = normalizeAnalyticsPayload(requestBody);
+
+    if (!event) {
+      sendJson(res, 400, { error: 'invalid-analytics-payload' });
+      return;
+    }
+
+    insertAnalyticsEvent.run(
+      decodedToken.uid,
+      typeof decodedToken.firebase?.sign_in_provider === 'string'
+        ? decodedToken.firebase.sign_in_provider
+        : 'unknown',
+      event.kind,
+      event.name,
+      JSON.stringify(event.params),
+      event.clientCreatedAt ?? null,
+      new Date().toISOString(),
+      event.platform ?? null
+    );
+
+    sendJson(res, 200, { ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown-error';
+    const statusCode =
+      message === 'missing-bearer-token' || message.includes('verifyIdToken')
+        ? 401
+        : message === 'invalid-analytics-payload'
+          ? 400
+          : 500;
+
+    if (statusCode === 500) {
+      console.error('[worker] analytics ingest failed', error);
+    }
+
+    sendJson(res, statusCode, { error: message });
+  }
+}
+
+function startHttpServer() {
+  const server = createServer((req, res) => {
+    setCorsHeaders(req, res);
+
+    const method = req.method ?? 'GET';
+    const url = req.url ?? '/';
+
+    if (method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    if (method === 'GET' && url === '/health') {
+      sendJson(res, 200, {
+        ok: true,
+        service: 'polled-notification-worker',
+        projectId: adminOptions.projectId ?? null,
+      });
+      return;
+    }
+
+    if (method === 'POST' && url === '/analytics') {
+      void handleAnalyticsIngest(req, res);
+      return;
+    }
+
+    sendJson(res, 404, { error: 'not-found' });
+  });
+
+  server.listen(ANALYTICS_HTTP_PORT, () => {
+    console.log(
+      `[worker] analytics ingest listening on :${ANALYTICS_HTTP_PORT} sqlite=${ANALYTICS_SQLITE_PATH}`
+    );
+  });
 }
 
 async function tryClaimAndProcessJob(jobRef: DocumentReference<NotificationJob>) {

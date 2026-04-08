@@ -6,7 +6,7 @@ import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter } from 'expo-router';
-import { trackEvent } from '@/utils/analytics';
+import { ensureAnalyticsJourneyStarted, trackEvent } from '@/utils/analytics';
 
 export default function LandingScreen() {
   const router = useRouter();
@@ -27,6 +27,9 @@ export default function LandingScreen() {
             className="bg-blue-600 border-0"
             onPress={() => {
               trackEvent('landing_cta_clicked', { destination: 'create' });
+              void ensureAnalyticsJourneyStarted('event_creation_flow', {
+                entry_point: 'landing',
+              });
               router.push('/onboarding?next=/create');
             }}
           >

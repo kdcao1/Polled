@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { Heading } from '@/components/ui/heading';
@@ -9,7 +9,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { getDoc, doc, setDoc, arrayUnion, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { KeyboardAvoidingView, Platform } from 'react-native';
 import { db, auth } from '../config/firebaseConfig';
-import { trackEvent } from '@/utils/analytics';
+import { abandonAnalyticsJourney, clearAnalyticsJourney, continueAnalyticsJourney, ensureAnalyticsJourneyStarted, trackEvent } from '@/utils/analytics';
 
 export default function JoinScreen() {
   const router = useRouter();
@@ -18,6 +18,26 @@ export default function JoinScreen() {
   const [joinCode, setJoinCode] = useState((params.code as string) || '');
   const [isJoining, setIsJoining] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    void ensureAnalyticsJourneyStarted('join_flow', {
+      entry_screen: 'join',
+      has_prefilled_code: !!params.code,
+    });
+
+    if (params.code) {
+      void ensureAnalyticsJourneyStarted('pending_vote_from_link_flow', {
+        source: 'invite_link',
+        code_length: String(params.code).length,
+      });
+    }
+
+    return () => {
+      void abandonAnalyticsJourney('join_flow', 'join_screen', {
+        task: 'join_event',
+      });
+    };
+  }, [params.code]);
 
   const handleJoin = async () => {
     const code = joinCode.trim().toUpperCase();
@@ -74,6 +94,15 @@ export default function JoinScreen() {
       await batch.commit();
 
       trackEvent('event_joined', { event_id: secureEventId });
+      await clearAnalyticsJourney('join_flow');
+      await continueAnalyticsJourney(
+        'pending_vote_from_link_flow',
+        `event_vote_flow:${secureEventId}:${auth.currentUser.uid}`,
+        {
+          event_id: secureEventId,
+          source: 'invite_link',
+        }
+      );
 
       // 4. Route them to the event
       router.replace(`/event/${secureEventId}`);

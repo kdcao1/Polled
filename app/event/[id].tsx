@@ -17,7 +17,7 @@ import EmptyState from '@/components/custom/EmptyState';
 import PollActionModal from '@/components/custom/PollActionModal';
 import ParticipantsModal from '@/components/custom/ParticipantsModal';
 import { buildJoinLink } from '@/utils/inviteLinks';
-import { trackEvent } from '@/utils/analytics';
+import { completeAnalyticsJourney, ensureAnalyticsJourneyStarted, incrementAnalyticsCounter, trackEvent, trackEventOnce } from '@/utils/analytics';
 import { getEventItemType, getRespondedUserIds, getResponseCount, isEventItemExpired } from '@/utils/eventItems';
 import { getEventStatusLabel, isEventEnded, shouldAutoEndEvent } from '@/utils/eventStatus';
 import { enqueueNotificationJob } from '@/utils/notificationJobs';
@@ -63,6 +63,10 @@ export default function EventScreen() {
   const mobileTabOffset = useRef(new Animated.Value(0)).current;
   const [hasAccess, setHasAccess] = useState(false);
   const [mobileTabWidth, setMobileTabWidth] = useState(0);
+  const seenPollLoadRef = useRef<Set<string>>(new Set());
+  const resultsViewStartedAtRef = useRef<number | null>(null);
+  const postVoteRefreshTrackedRef = useRef(false);
+  const currentUid = auth.currentUser?.uid;
 
   const joinLink = buildJoinLink(eventData?.joinCode);
   const mobileTabIndex = MOBILE_EVENT_TABS.indexOf(activeTab);
@@ -321,6 +325,12 @@ export default function EventScreen() {
     return winners.length === 1 ? winners[0] : null;
   };
 
+  const eventCreatedAtMs = eventData?.createdAt?.toDate
+    ? eventData.createdAt.toDate().getTime()
+    : eventData?.createdAt
+      ? new Date(eventData.createdAt).getTime()
+      : null;
+
   useEffect(() => {
     if (!id || !eventData || !hasAccess) return;
 
@@ -339,6 +349,18 @@ export default function EventScreen() {
 
         if (currentValue === winningValue) {
           quickPollSyncingRef.current[field] = linkedQuickPoll.id;
+          if (eventCreatedAtMs) {
+            void trackEventOnce(
+              `decision_reached:${id as string}:${field}:${linkedQuickPoll.id}`,
+              'time_to_decision_measured',
+              {
+                event_id: id as string,
+                field,
+                poll_id: linkedQuickPoll.id,
+                duration_seconds: Number(((Date.now() - eventCreatedAtMs) / 1000).toFixed(2)),
+              }
+            );
+          }
           continue;
         }
 
@@ -354,6 +376,18 @@ export default function EventScreen() {
             field,
             poll_id: linkedQuickPoll.id,
           });
+          if (eventCreatedAtMs) {
+            void trackEventOnce(
+              `decision_reached:${id as string}:${field}:${linkedQuickPoll.id}`,
+              'time_to_decision_measured',
+              {
+                event_id: id as string,
+                field,
+                poll_id: linkedQuickPoll.id,
+                duration_seconds: Number(((Date.now() - eventCreatedAtMs) / 1000).toFixed(2)),
+              }
+            );
+          }
         } catch (error) {
           quickPollSyncingRef.current[field] = null;
           console.error(`Error syncing ${field} quick poll result:`, error);
@@ -362,7 +396,42 @@ export default function EventScreen() {
     };
 
     syncQuickPollDetails();
-  }, [id, eventData, polls, hasAccess]);
+  }, [id, eventData, polls, hasAccess, eventCreatedAtMs]);
+
+  useEffect(() => {
+    if (!id || !currentUid || !hasAccess || isOrganizer) return;
+
+    void ensureAnalyticsJourneyStarted(`event_vote_flow:${id as string}:${currentUid}`, {
+      event_id: id as string,
+      source: 'event_screen',
+    });
+  }, [id, currentUid, hasAccess, isOrganizer]);
+
+  useEffect(() => {
+    if (!id || !currentUid || !hasAccess) return;
+
+    polls.forEach((poll) => {
+      const loadKey = `${id as string}:${currentUid}:${poll.id}`;
+      if (!seenPollLoadRef.current.has(loadKey)) {
+        seenPollLoadRef.current.add(loadKey);
+        void trackEvent('poll_loaded', {
+          event_id: id as string,
+          poll_id: poll.id,
+          item_type: getEventItemType(poll),
+          is_expired: isPollExpired(poll),
+        });
+      }
+
+      const hasResponded = getRespondedUserIds(poll).includes(currentUid);
+      if (isPollExpired(poll) && !hasResponded) {
+        void trackEventOnce(`poll_missed:${currentUid}:${poll.id}`, 'poll_missed', {
+          event_id: id as string,
+          poll_id: poll.id,
+          item_type: getEventItemType(poll),
+        });
+      }
+    });
+  }, [polls, currentUid, hasAccess, id]);
 
   useEffect(() => {
     if (!isMobile || mobileTabWidth <= 0) return;
@@ -470,6 +539,18 @@ export default function EventScreen() {
         poll_id: pollId,
         allow_multiple: allowMultipleVotes,
         selection_count: Array.isArray(selectedIndices) ? selectedIndices.length : 1,
+      });
+      void trackEvent('poll_response_submitted', {
+        event_id: id as string,
+        poll_id: pollId,
+        item_type: updatedItemType,
+        feature_name: roleAction ? 'role_card' : 'basic_poll',
+        selection_count: Array.isArray(selectedIndices) ? selectedIndices.length : 1,
+      });
+      void completeAnalyticsJourney(`event_vote_flow:${id as string}:${uid}`, 'time_to_vote_measured', {
+        event_id: id as string,
+        poll_id: pollId,
+        item_type: updatedItemType,
       });
       
     } catch (error: any) {
@@ -688,8 +769,6 @@ export default function EventScreen() {
     setIsModalOpen(true);
   };
 
-  const currentUid = auth.currentUser?.uid;
-  
   const isPollExpired = (poll: any) => {
     return isEventItemExpired(poll);
   };
@@ -706,6 +785,62 @@ export default function EventScreen() {
     const hasVoted = currentUid ? respondedUserIds.includes(currentUid) : false;
     return hasVoted || isPollExpired(poll);
   });
+
+  useEffect(() => {
+    if (!isMobile) return;
+
+    if (activeTab === 'answered') {
+      if (resultsViewStartedAtRef.current == null) {
+        resultsViewStartedAtRef.current = Date.now();
+      }
+      return;
+    }
+
+    if (resultsViewStartedAtRef.current != null) {
+      const durationSeconds = Number(((Date.now() - resultsViewStartedAtRef.current) / 1000).toFixed(2));
+      resultsViewStartedAtRef.current = null;
+      void trackEvent('results_dwell_time', {
+        event_id: id as string,
+        duration_seconds: durationSeconds,
+        answered_poll_count: answeredPolls.length,
+        source: 'mobile_results_tab',
+      });
+    }
+  }, [activeTab, answeredPolls.length, id, isMobile]);
+
+  useEffect(() => {
+    return () => {
+      if (!isMobile || resultsViewStartedAtRef.current == null) return;
+      const durationSeconds = Number(((Date.now() - resultsViewStartedAtRef.current) / 1000).toFixed(2));
+      void trackEvent('results_dwell_time', {
+        event_id: id as string,
+        duration_seconds: durationSeconds,
+        answered_poll_count: answeredPolls.length,
+        source: 'mobile_results_tab',
+      });
+    };
+  }, [answeredPolls.length, id, isMobile]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !id || !currentUid || answeredPolls.length === 0 || postVoteRefreshTrackedRef.current) {
+      return;
+    }
+
+    const navigationEntry = typeof performance !== 'undefined'
+      ? (performance.getEntriesByType?.('navigation')?.[0] as PerformanceNavigationTiming | undefined)
+      : undefined;
+
+    if (navigationEntry?.type !== 'reload') return;
+
+    postVoteRefreshTrackedRef.current = true;
+    void incrementAnalyticsCounter(`post_vote_refresh:${id as string}:${currentUid}`)
+      .then((count) => trackEvent('post_vote_refresh', {
+        event_id: id as string,
+        refresh_count: count,
+        answered_poll_count: answeredPolls.length,
+      }))
+      .catch((error) => console.error('Error tracking post-vote refresh:', error));
+  }, [answeredPolls.length, currentUid, id]);
 
   const roleAssignments = polls.reduce<Record<string, string[]>>((acc, poll) => {
     if (getEventItemType(poll) === 'role') {

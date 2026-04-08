@@ -14,7 +14,7 @@ import { useDashboard, EventData } from '../hooks/useDashboard';
 import { Settings, MoreVertical } from 'lucide-react-native';
 import EventActionModal from '@/components/custom/EventActionModal';
 import EventSummaryBadge from '@/components/custom/EventSummaryBadge'; // Ensure this path matches where you saved it!
-import { trackEvent } from '@/utils/analytics';
+import { ensureAnalyticsJourneyStarted, trackEvent } from '@/utils/analytics';
 import { getEventStatusLabel } from '@/utils/eventStatus';
 import { deleteEventCompletely } from '@/utils/eventDeletion';
 
@@ -139,6 +139,9 @@ export default function DashboardScreen() {
               className="bg-blue-600 border-0"
               onPress={() => {
                 trackEvent('dashboard_cta_clicked', { destination: 'create' });
+                void ensureAnalyticsJourneyStarted('event_creation_flow', {
+                  entry_point: 'dashboard_header',
+                });
                 router.push('/create');
               }}
             >
@@ -160,6 +163,9 @@ export default function DashboardScreen() {
               className="bg-blue-600 border-0 w-full"
               onPress={() => {
                 trackEvent('dashboard_cta_clicked', { destination: 'create_empty_state' });
+                void ensureAnalyticsJourneyStarted('event_creation_flow', {
+                  entry_point: 'dashboard_empty_state',
+                });
                 router.push('/create');
               }}
             >

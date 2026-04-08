@@ -126,6 +126,7 @@ export default function RootLayout() {
               <Stack.Screen name="login" options={{ headerShown: false, presentation: 'card' }} />
               <Stack.Screen name="create" options={{ title: 'New Event', presentation: 'card' }} />
               <Stack.Screen name="join" options={{ title: 'Join Event', presentation: 'card' }} />
+              <Stack.Screen name="debug" options={{ headerShown: false }} />
               <Stack.Screen name="event/[id]" options={{ title: 'Polled', headerLeft: () => null }} />
               <Stack.Screen name="edit/[id]" options={{ title: 'Edit Event', presentation: 'modal' }} />
             </Stack>

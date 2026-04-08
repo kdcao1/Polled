@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, ScrollView, Modal, TouchableOpacity, Pressable, Platform, ActionSheetIOS } from 'react-native';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -9,7 +9,7 @@ import { Button, ButtonText } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { collection, addDoc, serverTimestamp, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../../config/firebaseConfig';
-import { trackEvent } from '@/utils/analytics';
+import { abandonAnalyticsJourney, clearAnalyticsJourney, ensureAnalyticsJourneyStarted, trackEvent } from '@/utils/analytics';
 import type { PollEndCondition } from '@/utils/eventItems';
 import { enqueueNotificationJob } from '@/utils/notificationJobs';
 
@@ -55,6 +55,9 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
   const [slotLimitMode, setSlotLimitMode] = useState<'limited' | 'unlimited'>('limited');
   const [slotLimit, setSlotLimit] = useState('1');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const modalJourneyKeyRef = useRef('');
+  const modalSaveCompletedRef = useRef(false);
+  const wasVisibleRef = useRef(false);
 
   const queueNotificationJob = async (type: 'poll_created' | 'role_created', title: string, body: string) => {
     try {
@@ -123,6 +126,40 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
 
     loadEditingState();
   }, [visible, pollIdToEdit, eventId, initialQuestion, initialChoices, linkedField]);
+
+  useEffect(() => {
+    if (visible && !wasVisibleRef.current) {
+      modalSaveCompletedRef.current = false;
+      modalJourneyKeyRef.current = `poll_modal_flow:${eventId}:${pollIdToEdit || 'new'}:${linkedField || 'general'}`;
+      void ensureAnalyticsJourneyStarted(modalJourneyKeyRef.current, {
+        event_id: eventId,
+        modal_mode: pollIdToEdit ? 'edit' : 'create',
+        create_type: createType,
+        linked_field: linkedField ?? 'none',
+      });
+    }
+
+    if (!visible && wasVisibleRef.current && modalJourneyKeyRef.current) {
+      if (!modalSaveCompletedRef.current) {
+        void abandonAnalyticsJourney(
+          modalJourneyKeyRef.current,
+          createType === 'role' ? 'role_modal' : 'poll_modal',
+          {
+            event_id: eventId,
+            step: step + 1,
+            create_type: createType,
+            linked_field: linkedField ?? 'none',
+            question_started: !!question.trim(),
+            choice_count: choices.filter((choice) => choice.trim()).length,
+          }
+        );
+      }
+
+      modalJourneyKeyRef.current = '';
+    }
+
+    wasVisibleRef.current = visible;
+  }, [visible, eventId, pollIdToEdit, linkedField, createType, step, question, choices]);
 
   const handleClearForm = () => {
     resetForm();
@@ -283,6 +320,10 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
         await queueNotificationJob('role_created', 'New Role Available!', `${question.trim()} is now open to claim.`);
       }
 
+      modalSaveCompletedRef.current = true;
+      if (modalJourneyKeyRef.current) {
+        await clearAnalyticsJourney(modalJourneyKeyRef.current);
+      }
       handleClearForm();
       onClose();
     } catch (error) {
@@ -318,11 +359,18 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
   const renderStepPicker = () => (
     <VStack className="gap-3">
       <Text className="text-zinc-300 font-bold ml-1">What are you creating?</Text>
-      <TouchableOpacity
-        activeOpacity={0.8}
-        className={`p-4 rounded-2xl border ${createType === 'poll' ? 'bg-blue-600/10 border-blue-500' : 'bg-zinc-800 border-zinc-700'}`}
-        onPress={() => setCreateType('poll')}
-      >
+        <TouchableOpacity
+          activeOpacity={0.8}
+          className={`p-4 rounded-2xl border ${createType === 'poll' ? 'bg-blue-600/10 border-blue-500' : 'bg-zinc-800 border-zinc-700'}`}
+          onPress={() => {
+            trackEvent('feature_clicked', {
+              event_id: eventId,
+              feature_name: 'basic_poll',
+              source: 'poll_modal',
+            });
+            setCreateType('poll');
+          }}
+        >
         <Text className={`font-bold text-lg ${createType === 'poll' ? 'text-blue-300' : 'text-zinc-50'}`}>Poll</Text>
         <Text className="text-zinc-400 text-sm mt-1">Let the group vote on a question with options.</Text>
       </TouchableOpacity>
@@ -331,7 +379,14 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
         <TouchableOpacity
           activeOpacity={0.8}
           className={`p-4 rounded-2xl border ${createType === 'role' ? 'bg-amber-500/10 border-amber-500' : 'bg-zinc-800 border-zinc-700'}`}
-          onPress={() => setCreateType('role')}
+          onPress={() => {
+            trackEvent('feature_clicked', {
+              event_id: eventId,
+              feature_name: 'role_card',
+              source: 'poll_modal',
+            });
+            setCreateType('role');
+          }}
         >
           <Text className={`font-bold text-lg ${createType === 'role' ? 'text-amber-300' : 'text-zinc-50'}`}>Role</Text>
           <Text className="text-zinc-400 text-sm mt-1">Let people claim spots like driver, grill master, or DJ.</Text>

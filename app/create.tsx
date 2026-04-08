@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { Heading } from '@/components/ui/heading';
@@ -7,11 +7,24 @@ import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter } from 'expo-router';
 import { KeyboardAvoidingView, Platform } from 'react-native';
 import { useEvents } from '../hooks/useEvents'; 
+import { abandonAnalyticsJourney, ensureAnalyticsJourneyStarted } from '@/utils/analytics';
 
 export default function CreateScreen() {
   const [title, setTitle] = useState('');
   const { createNewEvent } = useEvents();
   const router = useRouter();
+
+  useEffect(() => {
+    void ensureAnalyticsJourneyStarted('event_creation_flow', {
+      entry_screen: 'create',
+    });
+
+    return () => {
+      void abandonAnalyticsJourney('event_creation_flow', 'create_screen', {
+        task: 'event_creation',
+      });
+    };
+  }, []);
 
   return (
     <KeyboardAvoidingView 
