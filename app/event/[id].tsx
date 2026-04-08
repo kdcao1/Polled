@@ -70,6 +70,8 @@ export default function EventScreen() {
 
   const joinLink = buildJoinLink(eventData?.joinCode);
   const mobileTabIndex = MOBILE_EVENT_TABS.indexOf(activeTab);
+  const resolvedMobileTabWidth = mobileTabWidth || Math.max(width - 32, 1);
+  const isMobileWeb = isMobile && Platform.OS === 'web';
 
   const mobileTabPanResponder = useRef(
     PanResponder.create({
@@ -971,6 +973,12 @@ export default function EventScreen() {
     )
   );
 
+  const renderMobileTabContent = () => {
+    if (activeTab === 'active') return renderActiveTab();
+    if (activeTab === 'answered') return renderAnsweredTab();
+    return renderDetailsTab();
+  };
+
   if (loading) {
     return (
       <Box className="flex-1 bg-zinc-900 justify-center items-center">
@@ -1070,47 +1078,58 @@ export default function EventScreen() {
             )}
 
             {/* --- TAB CONTENT --- */}
-            <View
-              className="flex-1 overflow-hidden"
-              onLayout={(event) => {
-                const nextWidth = Math.round(event.nativeEvent.layout.width);
-                if (!nextWidth || nextWidth === mobileTabWidth) return;
-                setMobileTabWidth(nextWidth);
-              }}
-              {...mobileTabPanResponder.panHandlers}
-            >
-              <Animated.View
-                className="flex-1 flex-row"
-                style={{
-                  width: (mobileTabWidth || Math.max(width - 32, 1)) * MOBILE_EVENT_TABS.length,
-                  transform: [{ translateX: mobileTabOffset }],
+            {isMobileWeb ? (
+              <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                <VStack className="gap-4 pb-12">
+                  {renderMobileTabContent()}
+                </VStack>
+              </ScrollView>
+            ) : (
+              <View
+                className="flex-1"
+                style={{ overflow: 'hidden' }}
+                onLayout={(event) => {
+                  const nextWidth = Math.round(event.nativeEvent.layout.width);
+                  if (!nextWidth || nextWidth === mobileTabWidth) return;
+                  setMobileTabWidth(nextWidth);
                 }}
+                {...mobileTabPanResponder.panHandlers}
               >
-                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
-                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-                    <VStack className="gap-4 pb-12">
-                      {renderDetailsTab()}
-                    </VStack>
-                  </ScrollView>
-                </View>
+                <Animated.View
+                  style={{
+                    flex: 1,
+                    flexDirection: 'row',
+                    flexWrap: 'nowrap',
+                    width: resolvedMobileTabWidth * MOBILE_EVENT_TABS.length,
+                    transform: [{ translateX: mobileTabOffset }],
+                  }}
+                >
+                  <View style={{ width: resolvedMobileTabWidth, minWidth: resolvedMobileTabWidth, maxWidth: resolvedMobileTabWidth, flexShrink: 0 }}>
+                    <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                      <VStack className="gap-4 pb-12">
+                        {renderDetailsTab()}
+                      </VStack>
+                    </ScrollView>
+                  </View>
 
-                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
-                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-                    <VStack className="gap-4 pb-12">
-                      {renderActiveTab()}
-                    </VStack>
-                  </ScrollView>
-                </View>
+                  <View style={{ width: resolvedMobileTabWidth, minWidth: resolvedMobileTabWidth, maxWidth: resolvedMobileTabWidth, flexShrink: 0 }}>
+                    <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                      <VStack className="gap-4 pb-12">
+                        {renderActiveTab()}
+                      </VStack>
+                    </ScrollView>
+                  </View>
 
-                <View style={{ width: mobileTabWidth || Math.max(width - 32, 1) }} className="flex-1">
-                  <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-                    <VStack className="gap-4 pb-12">
-                      {renderAnsweredTab()}
-                    </VStack>
-                  </ScrollView>
-                </View>
-              </Animated.View>
-            </View>
+                  <View style={{ width: resolvedMobileTabWidth, minWidth: resolvedMobileTabWidth, maxWidth: resolvedMobileTabWidth, flexShrink: 0 }}>
+                    <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                      <VStack className="gap-4 pb-12">
+                        {renderAnsweredTab()}
+                      </VStack>
+                    </ScrollView>
+                  </View>
+                </Animated.View>
+              </View>
+            )}
           </>
         ) : (
           /* --- DESKTOP VIEW --- */
