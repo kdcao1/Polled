@@ -981,7 +981,7 @@ export default function EventScreen() {
           /* --- DESKTOP VIEW --- */
           <View className="flex-1 flex-col md:flex-row gap-8 w-full pb-6">
             <View className="flex-1">
-              <HStack className="justify-between items-end mb-4 mt-1">
+              <HStack className="justify-between items-center mb-4">
                 <Heading size="xl" className="text-zinc-50">Active</Heading>
                 {isOrganizer && !eventEnded && (
                   <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => {
@@ -1004,7 +1004,12 @@ export default function EventScreen() {
             </View>
 
             <View className="flex-1">
-              <Heading size="xl" className="text-zinc-50 mb-4 mt-1">Answered / Results</Heading>
+              <HStack className="justify-between items-center mb-4">
+                <View className="justify-center" style={{ minHeight: 36 }}>
+                  <Heading size="xl" className="text-zinc-50">Answered / Results</Heading>
+                </View>
+                <View style={{ height: 36 }} />
+              </HStack>
               <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
                 <VStack className="gap-4 pb-12">
                   {answeredPolls.length === 0 ? (
