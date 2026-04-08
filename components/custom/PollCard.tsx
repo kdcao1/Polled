@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, TouchableOpacity, Animated } from 'react-native';
+import { View, TouchableOpacity, Animated, Platform } from 'react-native';
 import { MoreVertical } from 'lucide-react-native';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -115,12 +115,12 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
           Animated.timing(pulseAnim, {
             toValue: 0.5,
             duration: 1500,
-            useNativeDriver: true,
+            useNativeDriver: Platform.OS !== 'web',
           }),
           Animated.timing(pulseAnim, {
             toValue: 0.1,
             duration: 1500,
-            useNativeDriver: true,
+            useNativeDriver: Platform.OS !== 'web',
           }),
         ])
       );

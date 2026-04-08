@@ -22,7 +22,7 @@ import { getEventItemType, getRespondedUserIds, getResponseCount, isEventItemExp
 import { getEventStatusLabel, isEventEnded, shouldAutoEndEvent } from '@/utils/eventStatus';
 import { enqueueNotificationJob } from '@/utils/notificationJobs';
 import { doc, onSnapshot, collection, query, orderBy, deleteDoc, runTransaction, updateDoc, where, getDoc, serverTimestamp } from 'firebase/firestore';
-import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share, PanResponder, Animated, Easing } from 'react-native';
+import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share, PanResponder, Animated, Easing, Platform } from 'react-native';
 import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
 
 type LinkedField = 'time' | 'location';
@@ -371,7 +371,7 @@ export default function EventScreen() {
       toValue: -(mobileTabIndex * mobileTabWidth),
       duration: 220,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== 'web',
     }).start();
   }, [isMobile, mobileTabIndex, mobileTabOffset, mobileTabWidth]);
 

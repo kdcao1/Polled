@@ -51,11 +51,27 @@ export default function ParticipantsModal({ visible, onClose, participantIds, ro
         
         const fetched = await Promise.all(
           safeParticipantIds.map(async (uid) => {
-            const userDoc = await getDoc(doc(db, 'profiles', uid));
-            return {
-              id: uid,
-              name: userDoc.exists() ? (userDoc.data().displayName || 'Anonymous User') : 'Unknown User'
-            };
+            try {
+              const profileDoc = await getDoc(doc(db, 'profiles', uid));
+              if (profileDoc.exists()) {
+                return {
+                  id: uid,
+                  name: profileDoc.data().displayName || 'Anonymous User'
+                };
+              }
+
+              const userDoc = await getDoc(doc(db, 'users', uid));
+              return {
+                id: uid,
+                name: userDoc.exists() ? (userDoc.data().displayName || 'Anonymous User') : 'Unknown User'
+              };
+            } catch (participantError) {
+              console.error(`Error fetching participant ${uid}:`, participantError);
+              return {
+                id: uid,
+                name: 'Unknown User'
+              };
+            }
           })
         );
 
