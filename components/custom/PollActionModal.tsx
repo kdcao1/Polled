@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Pressable } from 'react-native';
+import { Modal, Pressable, Platform } from 'react-native';
 import { VStack } from '@/components/ui/vstack';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
@@ -43,7 +43,9 @@ export default function PollActionModal({
             <>
               <VStack className="gap-1 mb-2 items-center text-center">
                 <Heading size="xl" className="text-zinc-50">{itemLabel} Options</Heading>
-                <Text className="text-zinc-400 text-sm" numberOfLines={1}>"{poll.question}"</Text>
+                <Text className="text-zinc-400 text-sm" {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}>
+                  "{poll.question}"
+                </Text>
               </VStack>
               
               <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onEdit(poll); }}>

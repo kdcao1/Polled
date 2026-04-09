@@ -327,7 +327,10 @@ export default function PollCard({ poll, compact = false, isOrganizer = false, s
                   <Text className={`text-yellow-500 font-bold uppercase tracking-wider ${compact ? 'text-[10px]' : 'text-xs'}`}>
                     {winners.length > 1 ? 'Tie' : 'Winner'}:
                   </Text>
-                  <Text className={`font-bold text-zinc-50 flex-1 ${compact ? 'text-sm' : ''}`} numberOfLines={1}>
+                  <Text
+                    className={`font-bold text-zinc-50 flex-1 ${compact ? 'text-sm' : ''}`}
+                    {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}
+                  >
                     {winners.map((w: any) => w.text).join(' / ')}
                   </Text>
                 </HStack>

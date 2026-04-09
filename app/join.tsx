@@ -6,7 +6,7 @@ import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { getDoc, doc, setDoc, arrayUnion, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { getDocFromServer, doc, setDoc, arrayUnion, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { KeyboardAvoidingView, Platform } from 'react-native';
 import { db, auth } from '../config/firebaseConfig';
 import { abandonAnalyticsJourney, clearAnalyticsJourney, continueAnalyticsJourney, ensureAnalyticsJourneyStarted, trackEvent } from '@/utils/analytics';
@@ -49,7 +49,7 @@ export default function JoinScreen() {
 
     try {
       // 1. Resolve the invite code to a secure event ID
-      const joinCodeDoc = await getDoc(doc(db, 'joinCodes', code));
+      const joinCodeDoc = await getDocFromServer(doc(db, 'joinCodes', code));
 
       if (!joinCodeDoc.exists()) {
         trackEvent('event_join_failed', { reason: 'code_not_found' });
@@ -58,8 +58,29 @@ export default function JoinScreen() {
         return;
       }
 
-      const secureEventId = joinCodeDoc.data().eventId as string;
-      const eventDoc = await getDoc(doc(db, 'events', secureEventId));
+      const joinCodeData = joinCodeDoc.data();
+      const secureEventId = joinCodeData.eventId as string;
+      const joinCodeIdentityRequirement = joinCodeData.identityRequirement === 'linked_account'
+        ? 'linked_account'
+        : 'none';
+
+      if (joinCodeIdentityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
+        trackEvent('event_join_failed', { reason: 'linked_account_required' });
+        setIsJoining(false);
+        router.replace(`/link-account?next=${encodeURIComponent(`/join?code=${code}`)}`);
+        return;
+      }
+
+      let eventDoc;
+      try {
+        eventDoc = await getDocFromServer(doc(db, 'events', secureEventId));
+      } catch (error) {
+        console.error("Error reading event during join:", error);
+        trackEvent('event_join_failed', { reason: 'event_read_denied' });
+        setErrorMsg("We couldn't verify that event yet. Try again in a moment.");
+        setIsJoining(false);
+        return;
+      }
 
       if (!eventDoc.exists()) {
         trackEvent('event_join_failed', { reason: 'event_not_found' });
@@ -70,7 +91,7 @@ export default function JoinScreen() {
 
       const identityRequirement = eventDoc.data().identityRequirement === 'linked_account'
         ? 'linked_account'
-        : 'none';
+        : joinCodeIdentityRequirement;
 
       if (identityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
         trackEvent('event_join_failed', { reason: 'linked_account_required' });
@@ -82,16 +103,36 @@ export default function JoinScreen() {
       // 3. Add this event to the user's dashboard array
       const userRef = doc(db, 'users', auth.currentUser.uid);
       const memberRef = doc(db, 'events', secureEventId, 'members', auth.currentUser.uid);
-      const batch = writeBatch(db);
-      batch.set(userRef, {
-        joinedEvents: arrayUnion(secureEventId)
-      }, { merge: true });
-      batch.set(memberRef, {
-        uid: auth.currentUser.uid,
-        joinedAt: serverTimestamp(),
-        role: 'participant',
-      }, { merge: true });
-      await batch.commit();
+      try {
+        await setDoc(memberRef, {
+          uid: auth.currentUser.uid,
+          joinedAt: serverTimestamp(),
+          role: 'participant',
+        }, { merge: true });
+      } catch (error) {
+        console.error("Error creating event membership:", error);
+        trackEvent('event_join_failed', { reason: 'member_write_denied' });
+        setErrorMsg("We couldn't add you to that event.");
+        setIsJoining(false);
+        return;
+      }
+
+      try {
+        await setDoc(userRef, {
+          joinedEvents: arrayUnion(secureEventId)
+        }, { merge: true });
+      } catch (error) {
+        console.error("Error saving joined event to user profile:", error);
+        try {
+          await deleteDoc(memberRef);
+        } catch (rollbackError) {
+          console.error("Error rolling back failed join membership:", rollbackError);
+        }
+        trackEvent('event_join_failed', { reason: 'user_dashboard_write_denied' });
+        setErrorMsg("We couldn't save that event to your dashboard.");
+        setIsJoining(false);
+        return;
+      }
 
       trackEvent('event_joined', { event_id: secureEventId });
       await clearAnalyticsJourney('join_flow');
@@ -110,7 +151,7 @@ export default function JoinScreen() {
     } catch (error) {
       console.error("Error joining event:", error);
       trackEvent('event_join_failed', { reason: 'unknown_error' });
-      setErrorMsg("Something went wrong. Try again.");
+      setErrorMsg("We couldn't join that event. Try again in a moment.");
       setIsJoining(false);
     }
   };
