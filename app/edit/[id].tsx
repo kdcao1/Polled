@@ -1,5 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { KeyboardAvoidingView, Platform, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  Alert,
+  TouchableOpacity,
+  InteractionManager,
+  Pressable,
+  ScrollView,
+} from 'react-native';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -14,19 +23,34 @@ import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/t
 import { trackEvent } from '@/utils/analytics';
 import { parseScheduledEventDate } from '@/utils/eventStatus';
 
+const SUCCESS_TOAST_VISIBILITY_MS = 900;
+
 export default function EditEventScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams(); // Grabs the event ID from the URL
+  const params = useLocalSearchParams();
+  const { id } = params; // Grabs the event ID from the URL
   const toast = useToast();
   const currentUid = auth.currentUser?.uid;
+  const initialTitle = typeof params.title === 'string' ? params.title : '';
+  const initialTime = typeof params.time === 'string' ? params.time : '';
+  const initialLocation = typeof params.location === 'string' ? params.location : '';
+  const initialIdentityRequirement =
+    params.identityRequirement === 'linked_account' ? 'linked_account' : 'none';
+  const initialEventStatus = params.status === 'ended' ? 'ended' : 'voting';
+  const hasPrefilledValues =
+    typeof params.title === 'string' ||
+    typeof params.time === 'string' ||
+    typeof params.location === 'string' ||
+    typeof params.identityRequirement === 'string' ||
+    typeof params.status === 'string';
 
-  const [title, setTitle] = useState('');
-  const [time, setTime] = useState('');
-  const [location, setLocation] = useState('');
-  const [identityRequirement, setIdentityRequirement] = useState<'none' | 'linked_account'>('none');
-  const [eventStatus, setEventStatus] = useState<'voting' | 'ended'>('voting');
+  const [title, setTitle] = useState(initialTitle);
+  const [time, setTime] = useState(initialTime);
+  const [location, setLocation] = useState(initialLocation);
+  const [identityRequirement, setIdentityRequirement] = useState<'none' | 'linked_account'>(initialIdentityRequirement);
+  const [eventStatus, setEventStatus] = useState<'voting' | 'ended'>(initialEventStatus);
   
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!hasPrefilledValues);
   const [isSaving, setIsSaving] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
 
@@ -52,13 +76,21 @@ export default function EditEventScreen() {
     });
   };
 
+  const waitForSuccessToast = () =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, SUCCESS_TOAST_VISIBILITY_MS);
+    });
+
   // --- FETCH EXISTING EVENT DATA ---
   useEffect(() => {
+    let isActive = true;
+
     const fetchEvent = async () => {
       if (!id) return;
       try {
         const docRef = doc(db, 'events', id as string);
         const docSnap = await getDoc(docRef);
+        if (!isActive) return;
 
         if (docSnap.exists()) {
           const data = docSnap.data();
@@ -70,11 +102,13 @@ export default function EditEventScreen() {
             return;
           }
 
-          setTitle(data.title || '');
-          setTime(data.time || '');
-          setLocation(data.location || '');
-          setIdentityRequirement(data.identityRequirement === 'linked_account' ? 'linked_account' : 'none');
-          setEventStatus(data.status === 'ended' ? 'ended' : 'voting');
+          setTitle((current) => current || data.title || '');
+          setTime((current) => current || data.time || '');
+          setLocation((current) => current || data.location || '');
+          setIdentityRequirement((current) =>
+            current === 'linked_account' || data.identityRequirement !== 'linked_account' ? current : 'linked_account'
+          );
+          setEventStatus((current) => (current === 'ended' || data.status !== 'ended' ? current : 'ended'));
         } else {
           showToast('Not Found', 'This event no longer exists.', 'error');
           router.back();
@@ -83,11 +117,20 @@ export default function EditEventScreen() {
         console.error("Error fetching event:", error);
         showToast('Error', 'Could not load event details.', 'error');
       } finally {
-        setIsLoading(false);
+        if (isActive) {
+          setIsLoading(false);
+        }
       }
     };
 
-    fetchEvent();
+    const interactionTask = InteractionManager.runAfterInteractions(() => {
+      void fetchEvent();
+    });
+
+    return () => {
+      isActive = false;
+      interactionTask.cancel();
+    };
   }, [id, currentUid]);
 
   // --- SAVE CHANGES TO FIRESTORE ---
@@ -127,7 +170,8 @@ export default function EditEventScreen() {
       });
 
       showToast('Success', forceEnd ? 'Event ended successfully.' : 'Event updated successfully.', 'success');
-      router.back(); // Slide the modal back down
+      await waitForSuccessToast();
+      router.back();
     } catch (error) {
       console.error(forceEnd ? "Error ending event:" : "Error updating event:", error);
       showToast('Error', forceEnd ? 'Could not end event. Try again.' : 'Could not save changes. Try again.', 'error');
@@ -154,6 +198,7 @@ export default function EditEventScreen() {
       });
       showToast('Success', 'Event ended successfully.', 'success');
       trackEvent('event_ended_manual', { event_id: id as string, source: 'edit_screen' });
+      await waitForSuccessToast();
       router.back();
     } finally {
       setIsEnding(false);
@@ -181,8 +226,149 @@ export default function EditEventScreen() {
 
   if (isLoading) {
     return (
-      <Box className="flex-1 bg-zinc-900 justify-center items-center">
+      <Box className={`flex-1 justify-center items-center ${Platform.OS === 'web' ? 'bg-black/70' : 'bg-zinc-900'}`}>
         <ActivityIndicator size="large" color="#3b82f6" />
+      </Box>
+    );
+  }
+
+  const formContent = (
+    <VStack className="gap-8 w-full max-w-sm self-center">
+      
+      {/* Header */}
+      <HStack className="justify-between items-center w-full mt-2">
+        <Button 
+          variant="link" 
+          className="p-0"
+          onPress={() => router.back()}
+          isDisabled={isSaving || isEnding}
+        >
+          <ButtonText className="text-zinc-400">Cancel</ButtonText>
+        </Button>
+        
+        <Heading size="lg" className="text-zinc-50">Edit Event</Heading>
+        
+        <Button 
+          variant="link" 
+          className="p-0"
+          onPress={handleSave}
+          isDisabled={isSaving || isEnding || !title.trim()}
+        >
+          {isSaving ? (
+            <ButtonSpinner color="#3b82f6" />
+          ) : (
+            <ButtonText className={`font-bold ${title.trim() ? 'text-blue-500' : 'text-zinc-600'}`}>
+              Save
+            </ButtonText>
+          )}
+        </Button>
+      </HStack>
+
+      {/* Form */}
+      <VStack className="gap-5">
+        <VStack className="gap-2">
+          <Text className="text-zinc-300 font-medium ml-1">Event Name <Text className="text-red-500">*</Text></Text>
+          <Input variant="outline" size="xl" className="border-zinc-700 bg-zinc-800">
+            <InputField
+              placeholder="e.g., Weekend Getaway"
+              placeholderTextColor="#a1a1aa"
+              value={title}
+              onChangeText={setTitle}
+              className="text-zinc-50 font-semibold"
+            />
+          </Input>
+        </VStack>
+
+        <VStack className="gap-2">
+          <Text className="text-zinc-300 font-medium ml-1">Time (Optional)</Text>
+          <Input variant="outline" size="xl" className="border-zinc-700 bg-zinc-800">
+            <InputField
+              placeholder="e.g., Friday at 7 PM"
+              placeholderTextColor="#a1a1aa"
+              value={time}
+              onChangeText={setTime}
+              className="text-zinc-50"
+            />
+          </Input>
+        </VStack>
+
+        <VStack className="gap-2">
+          <Text className="text-zinc-300 font-medium ml-1">Location (Optional)</Text>
+          <Input variant="outline" size="xl" className="border-zinc-700 bg-zinc-800">
+            <InputField
+              placeholder="e.g., Downtown Arcade"
+              placeholderTextColor="#a1a1aa"
+              value={location}
+              onChangeText={setLocation}
+              className="text-zinc-50"
+            />
+          </Input>
+        </VStack>
+
+        <VStack className="gap-3">
+          <Text className="text-zinc-300 font-medium ml-1">Who Can Vote?</Text>
+
+          <TouchableOpacity
+            activeOpacity={0.85}
+            className={`rounded-2xl border p-4 ${identityRequirement === 'none' ? 'border-blue-500 bg-blue-600/10' : 'border-zinc-700 bg-zinc-800'}`}
+            onPress={() => setIdentityRequirement('none')}
+            disabled={isSaving || isEnding}
+          >
+            <VStack className="gap-1.5">
+              <Text className={`${identityRequirement === 'none' ? 'text-blue-300' : 'text-zinc-50'} font-bold text-base`}>
+                Open to onboarded users
+              </Text>
+              <Text className="text-zinc-400 text-sm leading-5">
+                Anyone who joins and sets a name can participate.
+              </Text>
+            </VStack>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.85}
+            className={`rounded-2xl border p-4 ${identityRequirement === 'linked_account' ? 'border-amber-500 bg-amber-500/10' : 'border-zinc-700 bg-zinc-800'}`}
+            onPress={() => setIdentityRequirement('linked_account')}
+            disabled={isSaving || isEnding}
+          >
+            <VStack className="gap-1.5">
+              <Text className={`${identityRequirement === 'linked_account' ? 'text-amber-300' : 'text-zinc-50'} font-bold text-base`}>
+                Require linked account
+              </Text>
+              <Text className="text-zinc-400 text-sm leading-5">
+                Participants must link Google or email before joining and voting.
+              </Text>
+            </VStack>
+          </TouchableOpacity>
+        </VStack>
+
+        {!isLoading && eventStatus !== 'ended' && (
+          <Button
+            size="xl"
+            variant="outline"
+            className="border-red-500/30 bg-red-500/10 mt-2"
+            onPress={confirmEndEvent}
+            isDisabled={isSaving || isEnding}
+          >
+            {isEnding ? (
+              <ButtonSpinner color="#fca5a5" />
+            ) : (
+              <ButtonText className="font-bold text-red-300">End Event</ButtonText>
+            )}
+          </Button>
+        )}
+      </VStack>
+    </VStack>
+  );
+
+  if (Platform.OS === 'web') {
+    return (
+      <Box className="flex-1 justify-center items-center px-4 py-6">
+        <Pressable className="absolute inset-0 bg-black/70" onPress={() => router.back()} />
+        <Box className="w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-900 px-6 py-6 z-10 shadow-2xl">
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            {formContent}
+          </ScrollView>
+        </Box>
       </Box>
     );
   }
@@ -193,132 +379,7 @@ export default function EditEventScreen() {
       style={{ flex: 1 }}
     >
       <Box className="flex-1 bg-zinc-900 px-6 pt-6">
-        <VStack className="gap-8 w-full max-w-sm self-center">
-          
-          {/* Header */}
-          <HStack className="justify-between items-center w-full mt-2">
-            <Button 
-              variant="link" 
-              className="p-0"
-              onPress={() => router.back()}
-              isDisabled={isSaving || isEnding}
-            >
-              <ButtonText className="text-zinc-400">Cancel</ButtonText>
-            </Button>
-            
-            <Heading size="lg" className="text-zinc-50">Edit Event</Heading>
-            
-            <Button 
-              variant="link" 
-              className="p-0"
-              onPress={handleSave}
-              isDisabled={isSaving || isEnding || !title.trim()}
-            >
-              {isSaving ? (
-                <ButtonSpinner color="#3b82f6" />
-              ) : (
-                <ButtonText className={`font-bold ${title.trim() ? 'text-blue-500' : 'text-zinc-600'}`}>
-                  Save
-                </ButtonText>
-              )}
-            </Button>
-          </HStack>
-
-          {/* Form */}
-          <VStack className="gap-5">
-            <VStack className="gap-2">
-              <Text className="text-zinc-300 font-medium ml-1">Event Name <Text className="text-red-500">*</Text></Text>
-              <Input variant="outline" size="xl" className="border-zinc-700 bg-zinc-800">
-                <InputField
-                  placeholder="e.g., Weekend Getaway"
-                  placeholderTextColor="#a1a1aa"
-                  value={title}
-                  onChangeText={setTitle}
-                  className="text-zinc-50 font-semibold"
-                />
-              </Input>
-            </VStack>
-
-            <VStack className="gap-2">
-              <Text className="text-zinc-300 font-medium ml-1">Time (Optional)</Text>
-              <Input variant="outline" size="xl" className="border-zinc-700 bg-zinc-800">
-                <InputField
-                  placeholder="e.g., Friday at 7 PM"
-                  placeholderTextColor="#a1a1aa"
-                  value={time}
-                  onChangeText={setTime}
-                  className="text-zinc-50"
-                />
-              </Input>
-            </VStack>
-
-            <VStack className="gap-2">
-              <Text className="text-zinc-300 font-medium ml-1">Location (Optional)</Text>
-              <Input variant="outline" size="xl" className="border-zinc-700 bg-zinc-800">
-                <InputField
-                  placeholder="e.g., Downtown Arcade"
-                  placeholderTextColor="#a1a1aa"
-                  value={location}
-                  onChangeText={setLocation}
-                  className="text-zinc-50"
-                />
-              </Input>
-            </VStack>
-
-            <VStack className="gap-3">
-              <Text className="text-zinc-300 font-medium ml-1">Who Can Vote?</Text>
-
-              <TouchableOpacity
-                activeOpacity={0.85}
-                className={`rounded-2xl border p-4 ${identityRequirement === 'none' ? 'border-blue-500 bg-blue-600/10' : 'border-zinc-700 bg-zinc-800'}`}
-                onPress={() => setIdentityRequirement('none')}
-                disabled={isSaving || isEnding}
-              >
-                <VStack className="gap-1.5">
-                  <Text className={`${identityRequirement === 'none' ? 'text-blue-300' : 'text-zinc-50'} font-bold text-base`}>
-                    Open to onboarded users
-                  </Text>
-                  <Text className="text-zinc-400 text-sm leading-5">
-                    Anyone who joins and sets a name can participate.
-                  </Text>
-                </VStack>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                activeOpacity={0.85}
-                className={`rounded-2xl border p-4 ${identityRequirement === 'linked_account' ? 'border-amber-500 bg-amber-500/10' : 'border-zinc-700 bg-zinc-800'}`}
-                onPress={() => setIdentityRequirement('linked_account')}
-                disabled={isSaving || isEnding}
-              >
-                <VStack className="gap-1.5">
-                  <Text className={`${identityRequirement === 'linked_account' ? 'text-amber-300' : 'text-zinc-50'} font-bold text-base`}>
-                    Require linked account
-                  </Text>
-                  <Text className="text-zinc-400 text-sm leading-5">
-                    Participants must link Google or email before joining and voting.
-                  </Text>
-                </VStack>
-              </TouchableOpacity>
-            </VStack>
-
-            {!isLoading && eventStatus !== 'ended' && (
-              <Button
-                size="xl"
-                variant="outline"
-                className="border-red-500/30 bg-red-500/10 mt-2"
-                onPress={confirmEndEvent}
-                isDisabled={isSaving || isEnding}
-              >
-                {isEnding ? (
-                  <ButtonSpinner color="#fca5a5" />
-                ) : (
-                  <ButtonText className="font-bold text-red-300">End Event</ButtonText>
-                )}
-              </Button>
-            )}
-          </VStack>
-
-        </VStack>
+        {formContent}
       </Box>
     </KeyboardAvoidingView>
   );

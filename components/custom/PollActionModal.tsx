@@ -35,7 +35,12 @@ export default function PollActionModal({
     : (poll.expiresAt && new Date() > (poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt)));
 
   return (
-    <Modal visible={isOpen} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={isOpen}
+      transparent
+      animationType={Platform.OS === 'web' ? 'none' : 'fade'}
+      onRequestClose={onClose}
+    >
       <Pressable className="flex-1 bg-black/70 justify-center items-center px-6" onPress={onClose}>
         <Pressable className="bg-zinc-900 border border-zinc-700 w-full max-w-sm rounded-3xl p-6 shadow-2xl gap-4" onPress={(e) => e.stopPropagation()}>
           

@@ -26,6 +26,7 @@ import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share, Modal, 
 import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
 
 type LinkedField = 'time' | 'location';
+type AvailabilityPollMode = 'date' | 'time';
 const MOBILE_EVENT_TABS = ['details', 'active', 'answered'] as const;
 type EventTab = typeof MOBILE_EVENT_TABS[number];
 
@@ -34,6 +35,15 @@ type PollModalConfig = {
   choices?: string[];
   pollIdToEdit?: string;
   linkedField?: LinkedField;
+  initialEditState?: {
+    createType: 'poll' | 'role';
+    allowMultiple: boolean;
+    allowInviteeChoices: boolean;
+    endCondition: 'time' | 'vote_count';
+    targetVoteCount: string;
+    slotLimitMode: 'limited' | 'unlimited';
+    slotLimit: string;
+  };
 };
 
 const EMPTY_MODAL_CONFIG: PollModalConfig = {};
@@ -42,6 +52,9 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DEFAULT_AVAILABILITY_START_HOUR = 7;
 const DEFAULT_AVAILABILITY_END_HOUR = 30;
+const DEFAULT_AVAILABILITY_STAGE_DURATION_HOURS = 24;
+const DEFAULT_DATE_AVAILABILITY_WINDOW_DAYS = 45;
+const MAX_PROMOTED_DATES = 7;
 
 const toDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -93,6 +106,25 @@ const formatHourLabel = (hour: number) => {
   return `${normalized}:00 ${suffix}`;
 };
 
+const formatDateTimeSlotLabel = (dateKey: string, hour: number) =>
+  `${formatFullDateLabel(dateKey)} at ${formatHourLabel(hour)}`;
+
+const createFutureDateKeys = (dayCount = DEFAULT_DATE_AVAILABILITY_WINDOW_DAYS) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return Array.from({ length: dayCount }, (_, index) => {
+    const nextDate = new Date(today);
+    nextDate.setDate(today.getDate() + index);
+    return toDateKey(nextDate);
+  });
+};
+
+const getAvailabilityMode = (poll: any): AvailabilityPollMode =>
+  poll?.availabilityMode === 'date' ? 'date' : 'time';
+
+const isDateAvailabilityKey = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
 const getAvailabilityCounts = (poll: any) => {
   const byUser = poll?.availabilityByUser || {};
   const counts: Record<string, number> = {};
@@ -116,12 +148,28 @@ const getTopAvailabilitySlots = (poll: any, limit = 3) => {
   const counts = getAvailabilityCounts(poll);
 
   return Object.entries(counts)
+    .filter(([slotKey]) => slotKey.includes('|'))
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([slotKey, count]) => {
       const [dateKey, hourString] = slotKey.split('|');
       return { slotKey, count, dateKey, hour: Number(hourString) };
     });
+};
+
+const getTopAvailabilityDates = (poll: any, limit = 3) => {
+  const counts = getAvailabilityCounts(poll);
+
+  return Object.entries(counts)
+    .filter(([dateKey]) => isDateAvailabilityKey(dateKey))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([dateKey, count]) => ({ dateKey, count }));
+};
+
+const getAvailabilityExpiresAtDate = (poll: any) => {
+  if (!poll?.expiresAt) return null;
+  return poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt);
 };
 
 const getAvailabilityHourBounds = (poll: any) => {
@@ -181,14 +229,17 @@ function TimeAvailabilityModal({ visible, eventId, onClose }: TimeAvailabilityMo
 
     try {
       await addDoc(collection(db, 'events', eventId, 'polls'), {
-        question: 'What time works best?',
+        question: 'What times work best?',
         type: 'availability',
+        availabilityMode: 'time',
+        linkedField: 'time',
         selectedDates,
         startHour: DEFAULT_AVAILABILITY_START_HOUR,
         endHour: DEFAULT_AVAILABILITY_END_HOUR,
         availabilityByUser: {},
         createdAt: serverTimestamp(),
         status: 'active',
+        expiresAt: new Date(Date.now() + DEFAULT_AVAILABILITY_STAGE_DURATION_HOURS * 60 * 60 * 1000),
       });
       onClose();
     } catch (error) {
@@ -268,6 +319,229 @@ function TimeAvailabilityModal({ visible, eventId, onClose }: TimeAvailabilityMo
             isDisabled={selectedDates.length === 0}
           >
             <ButtonText className="font-bold text-white">Create Time Calendar</ButtonText>
+          </Button>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+interface TimePollModeModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onChooseInviteesDecideDates: () => void;
+  onChooseCreatorSelectsDates: () => void;
+  onChooseManual: () => void;
+}
+
+function TimePollModeModal({
+  visible,
+  onClose,
+  onChooseInviteesDecideDates,
+  onChooseCreatorSelectsDates,
+  onChooseManual,
+}: TimePollModeModalProps) {
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <View className="flex-1 justify-center items-center p-4">
+        <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
+        <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-lg shadow-2xl z-10">
+          <HStack className="justify-between items-center mb-4">
+            <VStack className="flex-1 gap-1">
+              <Heading size="xl" className="text-zinc-50">Choose a time flow</Heading>
+              <Text className="text-zinc-400">
+                Pick how the group should decide the final event time.
+              </Text>
+            </VStack>
+            <Button size="sm" variant="link" onPress={onClose}>
+              <ButtonText className="text-zinc-400">Cancel</ButtonText>
+            </Button>
+          </HStack>
+
+          <VStack className="gap-3">
+            <TouchableOpacity
+              activeOpacity={0.85}
+              className="rounded-2xl border border-emerald-500 bg-emerald-500/10 p-4"
+              onPress={onChooseInviteesDecideDates}
+            >
+              <Text className="text-emerald-300 font-bold text-lg">Invitees decide dates first</Text>
+              <Text className="text-zinc-300 text-sm mt-1">
+                Open a date-availability poll across the next 45 days. When it ends, the top 7 dates automatically become a time-availability poll.
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              className="rounded-2xl border border-blue-500 bg-blue-500/10 p-4"
+              onPress={onChooseCreatorSelectsDates}
+            >
+              <Text className="text-blue-300 font-bold text-lg">I&apos;ll choose the candidate dates</Text>
+              <Text className="text-zinc-300 text-sm mt-1">
+                Use the current calendar flow where you pick up to 7 dates and invitees submit the hours they are free.
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              className="rounded-2xl border border-zinc-700 bg-zinc-800 p-4"
+              onPress={onChooseManual}
+            >
+              <Text className="text-zinc-100 font-bold text-lg">Set an exact date and time manually</Text>
+              <Text className="text-zinc-400 text-sm mt-1">
+                Skip polling and jump straight to editing the event details yourself.
+              </Text>
+            </TouchableOpacity>
+          </VStack>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+interface DateAvailabilityPickerModalProps {
+  visible: boolean;
+  poll: any | null;
+  currentUid?: string | null;
+  onClose: () => void;
+  onSave: (pollId: string, slots: string[]) => Promise<void>;
+}
+
+function DateAvailabilityPickerModal({
+  visible,
+  poll,
+  currentUid,
+  onClose,
+  onSave,
+}: DateAvailabilityPickerModalProps) {
+  const [selectedDates, setSelectedDates] = useState<string[]>([]);
+  const availableDateKeys = Array.isArray(poll?.availableDateKeys) ? [...poll.availableDateKeys].sort() : [];
+  const allowedDates = useMemo(() => new Set(availableDateKeys), [availableDateKeys]);
+  const firstDateKey = availableDateKeys[0] ?? toDateKey(new Date());
+  const lastDateKey = availableDateKeys[availableDateKeys.length - 1] ?? firstDateKey;
+  const firstDate = fromDateKey(firstDateKey);
+  const lastDate = fromDateKey(lastDateKey);
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
+  const monthCells = useMemo(() => getMonthGrid(calendarMonth), [calendarMonth]);
+  const minMonthValue = firstDate.getFullYear() * 12 + firstDate.getMonth();
+  const maxMonthValue = lastDate.getFullYear() * 12 + lastDate.getMonth();
+  const currentMonthValue = calendarMonth.getFullYear() * 12 + calendarMonth.getMonth();
+
+  useEffect(() => {
+    if (!visible || !poll) return;
+    setSelectedDates(getCurrentUserAvailability(poll, currentUid));
+    setCalendarMonth(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
+  }, [visible, poll, currentUid, firstDateKey]);
+
+  if (!poll) return null;
+
+  const toggleDate = (dateKey: string) => {
+    if (!allowedDates.has(dateKey)) return;
+
+    setSelectedDates((current) =>
+      current.includes(dateKey)
+        ? current.filter((value) => value !== dateKey)
+        : [...current, dateKey].sort()
+    );
+  };
+
+  const handleSave = async () => {
+    if (!poll?.id) return;
+
+    await onSave(poll.id, [...selectedDates].sort());
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <View className="flex-1 justify-center items-center p-4">
+        <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
+        <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-xl max-h-[90%] shadow-2xl z-10">
+          <HStack className="justify-between items-start mb-4 gap-4">
+            <VStack className="flex-1 gap-1">
+              <Heading size="xl" className="text-zinc-50">Pick the dates you can do</Heading>
+              <Text className="text-zinc-400">
+                Choose every day that works for you. The top 7 dates will advance to the time poll.
+              </Text>
+            </VStack>
+            <Button size="sm" variant="link" onPress={onClose}>
+              <ButtonText className="text-zinc-400">Cancel</ButtonText>
+            </Button>
+          </HStack>
+
+          <HStack className="items-center justify-between mb-4 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 py-3">
+            <TouchableOpacity
+              disabled={currentMonthValue <= minMonthValue}
+              onPress={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}
+            >
+              <Text className={`font-semibold ${currentMonthValue <= minMonthValue ? 'text-zinc-600' : 'text-emerald-400'}`}>Prev</Text>
+            </TouchableOpacity>
+            <Text className="text-zinc-50 font-bold text-lg">
+              {MONTH_NAMES[calendarMonth.getMonth()]} {calendarMonth.getFullYear()}
+            </Text>
+            <TouchableOpacity
+              disabled={currentMonthValue >= maxMonthValue}
+              onPress={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}
+            >
+              <Text className={`font-semibold ${currentMonthValue >= maxMonthValue ? 'text-zinc-600' : 'text-emerald-400'}`}>Next</Text>
+            </TouchableOpacity>
+          </HStack>
+
+          <VStack className="gap-2">
+            <HStack className="gap-2">
+              {WEEKDAY_LABELS.map((label) => (
+                <View key={label} className="flex-1 items-center py-2">
+                  <Text className="text-zinc-500 text-xs font-bold uppercase">{label}</Text>
+                </View>
+              ))}
+            </HStack>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              {monthCells.map((cell) => {
+                const cellStyle = { width: '14.2857%' as const, aspectRatio: 1, padding: 4 };
+                if (!cell.date) return <View key={cell.key} style={cellStyle} />;
+
+                const dateKey = toDateKey(cell.date);
+                const disabled = !allowedDates.has(dateKey);
+                const selected = selectedDates.includes(dateKey);
+
+                return (
+                  <View key={cell.key} style={cellStyle}>
+                    <TouchableOpacity
+                      disabled={disabled}
+                      activeOpacity={0.8}
+                      onPress={() => toggleDate(dateKey)}
+                      className={`flex-1 rounded-2xl border items-center justify-center ${selected ? 'bg-emerald-600 border-emerald-500' : 'bg-zinc-800 border-zinc-700'} ${disabled ? 'opacity-25' : ''}`}
+                    >
+                      <Text className={`font-semibold ${selected ? 'text-white' : 'text-zinc-200'}`}>
+                        {cell.date.getDate()}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          </VStack>
+
+          <VStack className="gap-3 mt-5">
+            <Text className="text-zinc-300 text-sm">
+              {selectedDates.length === 0
+                ? `No dates selected yet. Window: ${formatDateLabel(firstDateKey)} to ${formatDateLabel(lastDateKey)}`
+                : `${selectedDates.length} date${selectedDates.length === 1 ? '' : 's'} selected`}
+            </Text>
+
+            {selectedDates.length > 0 && (
+              <Text className="text-zinc-500 text-xs">
+                {selectedDates.map(formatDateLabel).join(', ')}
+              </Text>
+            )}
+          </VStack>
+
+          <Button
+            size="xl"
+            action="primary"
+            className="bg-emerald-600 border-0 mt-6"
+            onPress={handleSave}
+          >
+            <ButtonText className="font-bold text-white">Save Available Dates</ButtonText>
           </Button>
         </View>
       </View>
@@ -577,6 +851,77 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   );
 }
 
+interface FinalTimeSelectionModalProps {
+  visible: boolean;
+  poll: any | null;
+  onClose: () => void;
+  onSelectSlot: (poll: any, slotKey: string) => Promise<void>;
+}
+
+function FinalTimeSelectionModal({
+  visible,
+  poll,
+  onClose,
+  onSelectSlot,
+}: FinalTimeSelectionModalProps) {
+  const [savingSlotKey, setSavingSlotKey] = useState<string | null>(null);
+  const winningSlots = Array.isArray(poll?.tiedSlotKeys) ? poll.tiedSlotKeys : [];
+  const counts = getAvailabilityCounts(poll);
+
+  if (!poll) return null;
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <View className="flex-1 justify-center items-center p-4">
+        <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
+        <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-lg shadow-2xl z-10">
+          <HStack className="justify-between items-start mb-4 gap-4">
+            <VStack className="flex-1 gap-1">
+              <Heading size="xl" className="text-zinc-50">Choose the final time</Heading>
+              <Text className="text-zinc-400">
+                The time poll ended in a tie. Pick the winner from the top slots below.
+              </Text>
+            </VStack>
+            <Button size="sm" variant="link" onPress={onClose}>
+              <ButtonText className="text-zinc-400">Cancel</ButtonText>
+            </Button>
+          </HStack>
+
+          <VStack className="gap-3">
+            {winningSlots.map((slotKey: string) => {
+              const [dateKey, hourString] = slotKey.split('|');
+              const hour = Number(hourString);
+
+              return (
+                <Button
+                  key={slotKey}
+                  size="xl"
+                  variant="outline"
+                  className="border-zinc-700 bg-zinc-800 justify-start"
+                  onPress={async () => {
+                    setSavingSlotKey(slotKey);
+                    try {
+                      await onSelectSlot(poll, slotKey);
+                      onClose();
+                    } finally {
+                      setSavingSlotKey(null);
+                    }
+                  }}
+                  isDisabled={savingSlotKey !== null}
+                >
+                  <ButtonText className="text-left text-zinc-50 font-bold">
+                    {savingSlotKey === slotKey ? 'Saving...' : `${formatDateTimeSlotLabel(dateKey, hour)} (${counts[slotKey] || 0} free)`}
+                  </ButtonText>
+                </Button>
+              );
+            })}
+          </VStack>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 interface AvailabilityPollCardProps {
   poll: any;
   currentUid?: string | null;
@@ -586,6 +931,7 @@ interface AvailabilityPollCardProps {
   isOrganizer: boolean;
   onDelete: (poll: any) => void;
   onOpenAvailability: (poll: any) => void;
+  onResolveTie?: (poll: any) => void;
 }
 
 function AvailabilityPollCard({
@@ -597,16 +943,34 @@ function AvailabilityPollCard({
   isOrganizer,
   onDelete,
   onOpenAvailability,
+  onResolveTie,
 }: AvailabilityPollCardProps) {
-  const dateKeys = Array.isArray(poll.selectedDates) ? [...poll.selectedDates].sort() : [];
+  const availabilityMode = getAvailabilityMode(poll);
+  const isDateStage = availabilityMode === 'date';
+  const isAwaitingSelection = poll?.status === 'awaiting_selection';
+  const isEnded = poll?.status === 'ended';
+  const isActive = poll?.status === 'active';
+  const dateKeys = isDateStage
+    ? (Array.isArray(poll.availableDateKeys) ? [...poll.availableDateKeys].sort() : [])
+    : (Array.isArray(poll.selectedDates) ? [...poll.selectedDates].sort() : []);
   const counts = getAvailabilityCounts(poll);
   const currentSelections = getCurrentUserAvailability(poll, currentUid);
   const participantCount = Object.keys(poll.availabilityByUser || {}).filter((uid) =>
     Array.isArray(poll.availabilityByUser?.[uid]) && poll.availabilityByUser[uid].length > 0
   ).length;
   const topSlots = getTopAvailabilitySlots(poll, 3);
+  const topDates = getTopAvailabilityDates(poll, 3);
+  const promotedDates = Array.isArray(poll.winningDateKeys) ? poll.winningDateKeys : [];
   const { startHour, endHour } = getAvailabilityHourBounds(poll);
-  const shouldShowGrid = !showResults && (currentSelections.length > 0 || eventEnded);
+  const shouldShowGrid = !isDateStage && (currentSelections.length > 0 || eventEnded || isEnded || isAwaitingSelection || showResults);
+  const cardLabel = isDateStage ? 'Date Availability' : 'Time Availability';
+  const statusText = isAwaitingSelection
+    ? 'Organizer choosing winner'
+    : isEnded
+      ? 'Ended'
+      : isDateStage
+        ? 'Collecting dates'
+        : 'Collecting times';
 
   return (
     <VStack className={`bg-zinc-800 rounded-xl border border-zinc-700 ${compact ? 'p-4 gap-3' : 'p-5 gap-4'}`}>
@@ -616,11 +980,14 @@ function AvailabilityPollCard({
             {poll.question}
           </Text>
           <Text className="text-emerald-300 text-xs font-semibold uppercase tracking-wider">
-            Availability Calendar
+            {cardLabel}
+          </Text>
+          <Text className="text-zinc-500 text-[11px] font-semibold uppercase tracking-wider">
+            {statusText}
           </Text>
         </VStack>
 
-        {isOrganizer && !eventEnded && (
+        {isOrganizer && !eventEnded && isActive && (
           <TouchableOpacity
             onPress={() => onDelete(poll)}
             className="bg-red-900/30 border border-red-800/50 rounded-lg px-3 py-1 active:bg-red-900/60"
@@ -631,35 +998,89 @@ function AvailabilityPollCard({
       </HStack>
 
       <VStack className="gap-3">
-        <Text className="text-zinc-400 text-sm">
-          Selected dates: {dateKeys.length ? dateKeys.map(formatDateLabel).join(', ') : 'None yet'}
-        </Text>
+        {isDateStage ? (
+          <Text className="text-zinc-400 text-sm">
+            Date window: {dateKeys.length ? `${formatDateLabel(dateKeys[0])} to ${formatDateLabel(dateKeys[dateKeys.length - 1])}` : 'None yet'}
+          </Text>
+        ) : (
+          <Text className="text-zinc-400 text-sm">
+            Selected dates: {dateKeys.length ? dateKeys.map(formatDateLabel).join(', ') : 'None yet'}
+          </Text>
+        )}
 
         <HStack className="items-center justify-between flex-wrap gap-3">
           <Text className="text-zinc-300">
             {participantCount} attendee{participantCount === 1 ? '' : 's'} submitted availability
           </Text>
 
-          {!eventEnded && (
+          {!eventEnded && isActive && (
             <Button size="sm" action="primary" className="bg-emerald-600 border-0" onPress={() => onOpenAvailability(poll)}>
               <ButtonText className="font-bold text-white">
-                {currentSelections.length > 0 ? 'Edit Availability' : 'Mark Availability'}
+                {currentSelections.length > 0
+                  ? (isDateStage ? 'Edit Dates' : 'Edit Availability')
+                  : (isDateStage ? 'Pick Dates' : 'Mark Availability')}
               </ButtonText>
+            </Button>
+          )}
+
+          {!eventEnded && isAwaitingSelection && isOrganizer && onResolveTie && (
+            <Button size="sm" action="primary" className="bg-blue-600 border-0" onPress={() => onResolveTie(poll)}>
+              <ButtonText className="font-bold text-white">Choose Final Time</ButtonText>
             </Button>
           )}
         </HStack>
 
-        {topSlots.length > 0 && (
+        {isDateStage && topDates.length > 0 && (
+          <VStack className="gap-2 bg-zinc-900/50 border border-zinc-700 rounded-xl p-4">
+            <Text className="text-zinc-200 font-semibold">Most popular dates</Text>
+            {topDates.map((date) => (
+              <HStack key={date.dateKey} className="justify-between items-center">
+                <Text className="text-zinc-300">{formatFullDateLabel(date.dateKey)}</Text>
+                <Text className="text-emerald-300 font-bold">{date.count} free</Text>
+              </HStack>
+            ))}
+          </VStack>
+        )}
+
+        {!isDateStage && topSlots.length > 0 && (
           <VStack className="gap-2 bg-zinc-900/50 border border-zinc-700 rounded-xl p-4">
             <Text className="text-zinc-200 font-semibold">Most popular slots</Text>
             {topSlots.map((slot) => (
               <HStack key={slot.slotKey} className="justify-between items-center">
                 <Text className="text-zinc-300">
-                  {formatFullDateLabel(slot.dateKey)} at {formatHourLabel(slot.hour)}
+                  {formatDateTimeSlotLabel(slot.dateKey, slot.hour)}
                 </Text>
                 <Text className="text-emerald-300 font-bold">{slot.count} free</Text>
               </HStack>
             ))}
+          </VStack>
+        )}
+
+        {isDateStage && currentSelections.length > 0 && (
+          <VStack className="gap-2 bg-zinc-900/40 border border-zinc-700 rounded-xl p-4">
+            <Text className="text-zinc-200 font-semibold">Your dates</Text>
+            <Text className="text-zinc-400 text-sm">{currentSelections.map(formatDateLabel).join(', ')}</Text>
+          </VStack>
+        )}
+
+        {isDateStage && promotedDates.length > 0 && (
+          <VStack className="gap-2 bg-zinc-900/40 border border-zinc-700 rounded-xl p-4">
+            <Text className="text-zinc-200 font-semibold">Advanced to the time poll</Text>
+            <Text className="text-zinc-400 text-sm">{promotedDates.map(formatDateLabel).join(', ')}</Text>
+          </VStack>
+        )}
+
+        {isAwaitingSelection && Array.isArray(poll.tiedSlotKeys) && poll.tiedSlotKeys.length > 0 && (
+          <VStack className="gap-2 bg-zinc-900/40 border border-zinc-700 rounded-xl p-4">
+            <Text className="text-zinc-200 font-semibold">Final tied slots</Text>
+            {poll.tiedSlotKeys.map((slotKey: string) => {
+              const [dateKey, hourString] = slotKey.split('|');
+              return (
+                <Text key={slotKey} className="text-zinc-400 text-sm">
+                  {formatDateTimeSlotLabel(dateKey, Number(hourString))}
+                </Text>
+              );
+            })}
           </VStack>
         )}
 
@@ -713,28 +1134,50 @@ function AvailabilityPollCard({
 
 
 export default function EventScreen() {
-  const { id } = useLocalSearchParams();
+  const params = useLocalSearchParams();
+  const { id } = params;
   const router = useRouter();
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
   const toast = useToast();
+  const currentUid = auth.currentUser?.uid;
+  const initialEventData =
+    typeof params.title === 'string' ||
+    typeof params.time === 'string' ||
+    typeof params.location === 'string' ||
+    typeof params.status === 'string' ||
+    typeof params.joinCode === 'string' ||
+    typeof params.organizerId === 'string'
+      ? {
+          title: typeof params.title === 'string' ? params.title : '',
+          time: typeof params.time === 'string' ? params.time : '',
+          location: typeof params.location === 'string' ? params.location : '',
+          status: params.status === 'ended' ? 'ended' : 'voting',
+          joinCode: typeof params.joinCode === 'string' ? params.joinCode : undefined,
+          organizerId: typeof params.organizerId === 'string' ? params.organizerId : undefined,
+        }
+      : null;
 
-  const [eventData, setEventData] = useState<any>(null);
+  const [eventData, setEventData] = useState<any>(initialEventData);
   const [polls, setPolls] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isOrganizer, setIsOrganizer] = useState(false);
+  const [loading, setLoading] = useState(!initialEventData);
+  const [isOrganizer, setIsOrganizer] = useState(initialEventData?.organizerId === currentUid);
 
   const [activeTab, setActiveTab] = useState<EventTab>('details');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isTimePollModeModalOpen, setIsTimePollModeModalOpen] = useState(false);
   const [modalConfig, setModalConfig] = useState<PollModalConfig>(EMPTY_MODAL_CONFIG);
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
   const [isTimeAvailabilityModalOpen, setIsTimeAvailabilityModalOpen] = useState(false);
   const [availabilityPoll, setAvailabilityPoll] = useState<any>(null);
   const [isAvailabilityPickerOpen, setIsAvailabilityPickerOpen] = useState(false);
+  const [tieBreakerPoll, setTieBreakerPoll] = useState<any>(null);
   const [actionPoll, setActionPoll] = useState<any>(null);
   const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
-  const [participantIds, setParticipantIds] = useState<string[]>([]);
+  const [participantIds, setParticipantIds] = useState<string[] | null>(null);
   const quickPollSyncingRef = useRef<Record<LinkedField, string | null>>({ time: null, location: null });
+  const availabilityFinalizingRef = useRef<Set<string>>(new Set());
+  const modalConfigResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoEndingEventRef = useRef(false);
   const mobileTabOffset = useRef(new Animated.Value(0)).current;
   const [hasAccess, setHasAccess] = useState(false);
@@ -742,7 +1185,6 @@ export default function EventScreen() {
   const seenPollLoadRef = useRef<Set<string>>(new Set());
   const resultsViewStartedAtRef = useRef<number | null>(null);
   const postVoteRefreshTrackedRef = useRef(false);
-  const currentUid = auth.currentUser?.uid;
 
   const joinLink = buildJoinLink(eventData?.joinCode);
   const mobileTabIndex = MOBILE_EVENT_TABS.indexOf(activeTab);
@@ -779,22 +1221,109 @@ export default function EventScreen() {
   ).current;
   
   const openModal = (question = '', choices = ['', ''], linkedField?: LinkedField) => {
+    if (modalConfigResetTimeoutRef.current) {
+      clearTimeout(modalConfigResetTimeoutRef.current);
+      modalConfigResetTimeoutRef.current = null;
+    }
     setModalConfig({
       question,
       choices: [...choices],
       pollIdToEdit: undefined,
       linkedField,
+      initialEditState: undefined,
     });
     setIsModalOpen(true);
   };
 
   const openCreateModal = () => {
+    if (modalConfigResetTimeoutRef.current) {
+      clearTimeout(modalConfigResetTimeoutRef.current);
+      modalConfigResetTimeoutRef.current = null;
+    }
     setModalConfig(EMPTY_MODAL_CONFIG);
     setIsModalOpen(true);
   };
 
+  const queueAvailabilityNotification = async (title: string, body: string) => {
+    if (!id) return;
+
+    try {
+      await enqueueNotificationJob({
+        eventId: id as string,
+        type: 'poll_created',
+        title,
+        body,
+      });
+    } catch (error) {
+      console.error('Error queueing availability notification:', error);
+    }
+  };
+
   const openTimeAvailabilityModal = () => {
     setIsTimeAvailabilityModalOpen(true);
+  };
+
+  const openTimePollModeModal = () => {
+    setIsTimePollModeModalOpen(true);
+  };
+
+  const createDateAvailabilityPoll = async () => {
+    if (!id) return;
+
+    try {
+      await addDoc(collection(db, 'events', id as string, 'polls'), {
+        question: 'Which dates work best?',
+        type: 'availability',
+        availabilityMode: 'date',
+        linkedField: 'time',
+        availableDateKeys: createFutureDateKeys(),
+        availabilityByUser: {},
+        createdAt: serverTimestamp(),
+        status: 'active',
+        maxPromotedDates: MAX_PROMOTED_DATES,
+        nextStageDurationHours: DEFAULT_AVAILABILITY_STAGE_DURATION_HOURS,
+        startHour: DEFAULT_AVAILABILITY_START_HOUR,
+        endHour: DEFAULT_AVAILABILITY_END_HOUR,
+        expiresAt: new Date(Date.now() + DEFAULT_AVAILABILITY_STAGE_DURATION_HOURS * 60 * 60 * 1000),
+      });
+
+      await queueAvailabilityNotification(
+        'Date Availability Open!',
+        'Pick every date that works for you. The top dates will move on to the time poll.'
+      );
+      setIsTimePollModeModalOpen(false);
+    } catch (error) {
+      console.error('Error creating date availability poll:', error);
+    }
+  };
+
+  const openTieBreaker = (poll: any) => {
+    setTieBreakerPoll(poll);
+  };
+
+  const handleSelectFinalTimeSlot = async (poll: any, slotKey: string) => {
+    if (!id) return;
+
+    const [dateKey, hourString] = slotKey.split('|');
+    const finalTime = formatDateTimeSlotLabel(dateKey, Number(hourString));
+
+    await updateDoc(doc(db, 'events', id as string), {
+      time: finalTime,
+    });
+
+    await updateDoc(doc(db, 'events', id as string, 'polls', poll.id), {
+      status: 'ended',
+      finalizedAt: serverTimestamp(),
+      winningSlotKey: slotKey,
+      winningLabel: finalTime,
+      tiedSlotKeys: [],
+    });
+
+    trackEvent('availability_time_tie_resolved', {
+      event_id: id as string,
+      poll_id: poll.id,
+      slot_key: slotKey,
+    });
   };
 
   const openLinkedPollFlow = (field: LinkedField) => {
@@ -804,19 +1333,43 @@ export default function EventScreen() {
         item_type: 'availability_poll',
         linked_field: field,
       });
-      openTimeAvailabilityModal();
+      openTimePollModeModal();
       return;
     }
 
     openModal('Where we going?', ['', ''], field);
   };
 
+  const openEditEvent = () => {
+    if (!id) return;
+
+    router.push({
+      pathname: '/edit/[id]',
+      params: {
+        id: id as string,
+        title: eventData?.title ?? '',
+        time: eventData?.time ?? '',
+        location: eventData?.location ?? '',
+        identityRequirement: eventData?.identityRequirement === 'linked_account' ? 'linked_account' : 'none',
+        status: eventData?.status === 'ended' ? 'ended' : 'voting',
+      },
+    });
+  };
+
   const closePollModal = () => {
     setIsModalOpen(false);
-    setModalConfig(EMPTY_MODAL_CONFIG);
+    if (modalConfigResetTimeoutRef.current) {
+      clearTimeout(modalConfigResetTimeoutRef.current);
+    }
+    modalConfigResetTimeoutRef.current = setTimeout(() => {
+      setModalConfig(EMPTY_MODAL_CONFIG);
+      modalConfigResetTimeoutRef.current = null;
+    }, 220);
   };
 
   const openAvailabilityPicker = (poll: any) => {
+    if (poll?.status !== 'active') return;
+
     if (eventData?.identityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
       toast.show({
         placement: "top",
@@ -878,6 +1431,15 @@ export default function EventScreen() {
   };
 
   const handleNativeShare = async () => {
+    const mobileToastStyle =
+      Platform.OS === 'web'
+        ? undefined
+        : {
+            backgroundColor: '#27272a',
+            opacity: 1,
+            elevation: 10,
+          };
+
     try {
       const result = await Share.share({
         message: `Join my event "${eventData?.title}" on Polled! Code: ${eventData?.joinCode}\n${joinLink}`,
@@ -892,7 +1454,11 @@ export default function EventScreen() {
         toast.show({
           placement: "top",
           render: ({ id: toastId }) => (
-            <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <Toast
+              nativeID={toastId}
+              className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg"
+              style={mobileToastStyle}
+            >
               <VStack>
                 <ToastTitle className="text-green-400 font-bold text-sm">Shared!</ToastTitle>
                 <ToastDescription className="text-zinc-300 text-xs mt-0.5">Thanks for spreading the word about the event.</ToastDescription>
@@ -908,7 +1474,11 @@ export default function EventScreen() {
       toast.show({
         placement: "top",
         render: ({ id: toastId }) => (
-          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+          <Toast
+            nativeID={toastId}
+            className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg"
+            style={mobileToastStyle}
+          >
             <VStack>
               <ToastTitle className="text-red-400 font-bold text-sm">Sharing Failed</ToastTitle>
               <ToastDescription className="text-zinc-300 text-xs mt-0.5">Something went wrong trying to open the share menu.</ToastDescription>
@@ -1042,6 +1612,144 @@ export default function EventScreen() {
     return winners.length === 1 ? winners[0] : null;
   };
 
+  const isAvailabilityPoll = (poll: any) => poll?.type === 'availability';
+  const isDateAvailabilityPoll = (poll: any) => isAvailabilityPoll(poll) && getAvailabilityMode(poll) === 'date';
+  const isTimeAvailabilityPoll = (poll: any) => isAvailabilityPoll(poll) && getAvailabilityMode(poll) === 'time';
+
+  const isAvailabilityPollExpired = (poll: any) => {
+    if (!isAvailabilityPoll(poll)) return false;
+    if (poll?.status === 'awaiting_selection' || poll?.status === 'ended') return true;
+    const expiresAtDate = getAvailabilityExpiresAtDate(poll);
+    return !!expiresAtDate && new Date() > expiresAtDate;
+  };
+
+  const finalizeAvailabilityPoll = async (poll: any) => {
+    if (!id) return;
+
+    const pollRef = doc(db, 'events', id as string, 'polls', poll.id);
+    const pollSnap = await getDoc(pollRef);
+    if (!pollSnap.exists()) return;
+
+    const latestPoll: any = { id: pollSnap.id, ...pollSnap.data() };
+    if (latestPoll.status !== 'active') return;
+
+    if (isDateAvailabilityPoll(latestPoll)) {
+      const promotedDateKeys = getTopAvailabilityDates(latestPoll, latestPoll.maxPromotedDates || MAX_PROMOTED_DATES)
+        .map((entry) => entry.dateKey);
+
+      const nextStageDurationHours =
+        typeof latestPoll.nextStageDurationHours === 'number'
+          ? latestPoll.nextStageDurationHours
+          : DEFAULT_AVAILABILITY_STAGE_DURATION_HOURS;
+
+      let nextStagePollId: string | null = null;
+      if (promotedDateKeys.length > 0) {
+        const nextStagePoll = await addDoc(collection(db, 'events', id as string, 'polls'), {
+          question: 'What times work best?',
+          type: 'availability',
+          availabilityMode: 'time',
+          linkedField: 'time',
+          selectedDates: promotedDateKeys,
+          startHour:
+            typeof latestPoll.startHour === 'number'
+              ? latestPoll.startHour
+              : DEFAULT_AVAILABILITY_START_HOUR,
+          endHour:
+            typeof latestPoll.endHour === 'number'
+              ? latestPoll.endHour
+              : DEFAULT_AVAILABILITY_END_HOUR,
+          availabilityByUser: {},
+          createdAt: serverTimestamp(),
+          status: 'active',
+          sourcePollId: latestPoll.id,
+          expiresAt: new Date(Date.now() + nextStageDurationHours * 60 * 60 * 1000),
+        });
+
+        nextStagePollId = nextStagePoll.id;
+        await queueAvailabilityNotification(
+          'Time Availability Open!',
+          'The top dates are in. Pick the hours you are free for each finalist date.'
+        );
+      }
+
+      await updateDoc(pollRef, {
+        status: 'ended',
+        finalizedAt: serverTimestamp(),
+        winningDateKeys: promotedDateKeys,
+        nextStagePollId,
+      });
+
+      trackEvent('availability_date_stage_completed', {
+        event_id: id as string,
+        poll_id: latestPoll.id,
+        promoted_date_count: promotedDateKeys.length,
+      });
+
+      return;
+    }
+
+    const winningSlots = getTopAvailabilitySlots(latestPoll, 100);
+    if (winningSlots.length === 0) {
+      await updateDoc(pollRef, {
+        status: 'ended',
+        finalizedAt: serverTimestamp(),
+        winningSlotKey: null,
+      });
+      return;
+    }
+
+    const highestCount = winningSlots[0].count;
+    const tiedWinningSlots = winningSlots.filter((slot) => slot.count === highestCount);
+
+    if (tiedWinningSlots.length === 1) {
+      const finalSlot = tiedWinningSlots[0];
+      const finalTime = formatDateTimeSlotLabel(finalSlot.dateKey, finalSlot.hour);
+
+      await updateDoc(doc(db, 'events', id as string), {
+        time: finalTime,
+      });
+
+      await updateDoc(pollRef, {
+        status: 'ended',
+        finalizedAt: serverTimestamp(),
+        winningSlotKey: finalSlot.slotKey,
+        winningLabel: finalTime,
+      });
+
+      trackEvent('availability_time_stage_completed', {
+        event_id: id as string,
+        poll_id: latestPoll.id,
+        winning_slot: finalSlot.slotKey,
+      });
+
+      if (eventCreatedAtMs) {
+        void trackEventOnce(
+          `decision_reached:${id as string}:time:${latestPoll.id}`,
+          'time_to_decision_measured',
+          {
+            event_id: id as string,
+            field: 'time',
+            poll_id: latestPoll.id,
+            duration_seconds: Number(((Date.now() - eventCreatedAtMs) / 1000).toFixed(2)),
+          }
+        );
+      }
+      return;
+    }
+
+    await updateDoc(pollRef, {
+      status: 'awaiting_selection',
+      finalizedAt: serverTimestamp(),
+      tiedSlotKeys: tiedWinningSlots.map((slot) => slot.slotKey),
+    });
+
+    trackEvent('availability_time_stage_tied', {
+      event_id: id as string,
+      poll_id: latestPoll.id,
+      tied_slot_count: tiedWinningSlots.length,
+    });
+  };
+
   const eventCreatedAtMs = eventData?.createdAt?.toDate
     ? eventData.createdAt.toDate().getTime()
     : eventData?.createdAt
@@ -1114,6 +1822,38 @@ export default function EventScreen() {
 
     syncQuickPollDetails();
   }, [id, eventData, polls, hasAccess, eventCreatedAtMs]);
+
+  useEffect(() => {
+    if (!id || !hasAccess) return;
+
+    const processAvailabilityPolls = async () => {
+      for (const poll of polls) {
+        if (!isAvailabilityPoll(poll)) continue;
+        if (poll?.status !== 'active') continue;
+        if (!isAvailabilityPollExpired(poll)) continue;
+        if (availabilityFinalizingRef.current.has(poll.id)) continue;
+
+        availabilityFinalizingRef.current.add(poll.id);
+        try {
+          await finalizeAvailabilityPoll(poll);
+        } catch (error) {
+          console.error('Error finalizing availability poll:', error);
+        } finally {
+          availabilityFinalizingRef.current.delete(poll.id);
+        }
+      }
+    };
+
+    void processAvailabilityPolls();
+  }, [id, polls, hasAccess]);
+
+  useEffect(() => {
+    return () => {
+      if (modalConfigResetTimeoutRef.current) {
+        clearTimeout(modalConfigResetTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!id || !currentUid || !hasAccess || isOrganizer) return;
@@ -1453,6 +2193,15 @@ export default function EventScreen() {
   const handleEndPollEarly = async (poll: any) => {
     if (!id) return;
     try {
+      if (isAvailabilityPoll(poll)) {
+        await finalizeAvailabilityPoll({
+          ...poll,
+          expiresAt: new Date(),
+        });
+        trackEvent('poll_ended_early', { event_id: id as string, poll_id: poll.id });
+        return;
+      }
+
       await updateDoc(doc(db, 'events', id as string, 'polls', poll.id), {
         expiresAt: new Date()
       });
@@ -1463,12 +2212,22 @@ export default function EventScreen() {
   };
 
   const handleEditPoll = (poll: any) => {
+    const itemType = getEventItemType(poll) === 'role' ? 'role' : 'poll';
     trackEvent(getEventItemType(poll) === 'role' ? 'role_edit_started' : 'poll_edit_started', { event_id: id as string, poll_id: poll.id });
     setModalConfig({ 
       question: poll.question, 
-      choices: poll.options.map((o: any) => o.text),
+      choices: Array.isArray(poll.options) && poll.options.length > 0 ? poll.options.map((o: any) => o.text) : ['', ''],
       pollIdToEdit: poll.id,
       linkedField: poll.linkedField,
+      initialEditState: {
+        createType: itemType,
+        allowMultiple: !!poll.allowMultiple,
+        allowInviteeChoices: !!poll.allowInviteeChoices,
+        endCondition: poll.endCondition === 'vote_count' ? 'vote_count' : 'time',
+        targetVoteCount: poll.targetVoteCount ? String(poll.targetVoteCount) : '5',
+        slotLimitMode: poll.slotLimit == null ? 'unlimited' : 'limited',
+        slotLimit: poll.slotLimit != null ? String(poll.slotLimit) : '1',
+      },
     });
     setIsModalOpen(true);
   };
@@ -1481,13 +2240,13 @@ export default function EventScreen() {
       choices: poll.options.map((o: any) => o.text),
       pollIdToEdit: undefined,
       linkedField: poll.linkedField,
+      initialEditState: undefined,
     });
     setIsModalOpen(true);
   };
 
-  const isAvailabilityPoll = (poll: any) => poll?.type === 'availability';
   const isPollExpired = (poll: any) => {
-    if (isAvailabilityPoll(poll)) return false;
+    if (isAvailabilityPoll(poll)) return isAvailabilityPollExpired(poll);
     return isEventItemExpired(poll);
   };
 
@@ -1600,8 +2359,11 @@ export default function EventScreen() {
 
     return acc;
   }, {});
-  const headcount = participantIds.length;
-  const timeAvailabilityPoll = polls.find((poll) => isAvailabilityPoll(poll) && poll?.status !== 'ended');
+  const headcount = participantIds?.length ?? null;
+  const dateAvailabilityPoll = polls.find((poll) => isDateAvailabilityPoll(poll) && poll.linkedField === 'time' && poll?.status === 'active');
+  const activeTimeAvailabilityPoll = polls.find((poll) => isTimeAvailabilityPoll(poll) && poll.linkedField === 'time' && poll?.status === 'active');
+  const timeTieSelectionPoll = polls.find((poll) => isTimeAvailabilityPoll(poll) && poll.linkedField === 'time' && poll?.status === 'awaiting_selection');
+  const timeAvailabilityPoll = timeTieSelectionPoll || activeTimeAvailabilityPoll || dateAvailabilityPoll;
   const timeQuickPoll = getLinkedQuickPoll('time');
   const locationQuickPoll = getLinkedQuickPoll('location');
 
@@ -1616,13 +2378,41 @@ export default function EventScreen() {
     }
 
     const linkedQuickPoll = field === 'time' ? timeQuickPoll : locationQuickPoll;
-    const defaultQuestion = field === 'time' ? 'What time?' : 'Where we going?';
     const defaultButtonLabel = field === 'time' ? 'Poll Time' : 'Poll Location';
 
-    if (field === 'time' && timeAvailabilityPoll) {
+    if (field === 'time' && timeTieSelectionPoll) {
+      if (isOrganizer) {
+        return (
+          <Button
+            size="sm"
+            variant="outline"
+            className="self-start border-zinc-600 bg-zinc-800 mt-2"
+            onPress={() => openTieBreaker(timeTieSelectionPoll)}
+          >
+            <ButtonText className="text-zinc-50 font-semibold">Choose Final Time</ButtonText>
+          </Button>
+        );
+      }
+
+      return (
+        <Text className="text-amber-300 text-base font-semibold">
+          Organizer choosing final time
+        </Text>
+      );
+    }
+
+    if (field === 'time' && dateAvailabilityPoll) {
       return (
         <Text className="text-emerald-400 text-base font-semibold">
-          Currently polling
+          Date availability open
+        </Text>
+      );
+    }
+
+    if (field === 'time' && activeTimeAvailabilityPoll) {
+      return (
+        <Text className="text-emerald-400 text-base font-semibold">
+          Time availability open
         </Text>
       );
     }
@@ -1687,7 +2477,9 @@ export default function EventScreen() {
         <HStack className="justify-between items-center">
           <VStack>
             <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Participants</Text>
-            <Text className="text-zinc-50 text-lg font-semibold mt-0.5">{headcount} {headcount === 1 ? 'person' : 'people'}</Text>
+            <Text className="text-zinc-50 text-lg font-semibold mt-0.5">
+              {headcount == null ? '...' : `${headcount} ${headcount === 1 ? 'person' : 'people'}`}
+            </Text>
           </VStack>
           <TouchableOpacity activeOpacity={0.7} onPress={() => {
             trackEvent('participants_modal_opened', { event_id: id as string });
@@ -1704,7 +2496,7 @@ export default function EventScreen() {
             size="xl" 
             variant="outline" 
             className="border-zinc-600 bg-zinc-800" 
-            onPress={() => router.push(`/edit/${id as string}`)}
+            onPress={openEditEvent}
           >
             <ButtonText className="font-bold text-zinc-50">Edit Event Details</ButtonText>
           </Button>
@@ -1726,6 +2518,7 @@ export default function EventScreen() {
           isOrganizer={isOrganizer}
           onDelete={handleDeletePoll}
           onOpenAvailability={openAvailabilityPicker}
+          onResolveTie={openTieBreaker}
         />
       );
     }
@@ -1783,7 +2576,7 @@ export default function EventScreen() {
     return renderDetailsTab();
   };
 
-  if (loading) {
+  if (loading && !eventData) {
     return (
       <Box className="flex-1 bg-zinc-900 justify-center items-center">
         <Text className="text-zinc-400">Loading Event...</Text>
@@ -1814,13 +2607,14 @@ export default function EventScreen() {
               setIsQRModalOpen(true);
             }}
             onOpenLinkedPoll={openLinkedPollFlow}
+            onResolveTimeTie={timeTieSelectionPoll ? () => openTieBreaker(timeTieSelectionPoll) : undefined}
             onShowParticipants={() => {
               trackEvent('participants_modal_opened', { event_id: id as string });
               setIsParticipantsModalOpen(true);
             }}
             onEditEvent={() => {
               trackEvent('event_edit_started', { event_id: id as string });
-              router.push(`/edit/${id as string}`);
+              openEditEvent();
             }}
           />
         )}
@@ -1978,17 +2772,57 @@ export default function EventScreen() {
       </View>
 
       <QRModal visible={isQRModalOpen} onClose={() => setIsQRModalOpen(false)} eventData={eventData} joinLink={joinLink} />
-      <PollModal visible={isModalOpen} eventId={id as string} onClose={closePollModal} initialQuestion={modalConfig.question} initialChoices={modalConfig.choices} pollIdToEdit={modalConfig.pollIdToEdit} linkedField={modalConfig.linkedField} />
+      <PollModal
+        visible={isModalOpen}
+        eventId={id as string}
+        onClose={closePollModal}
+        initialQuestion={modalConfig.question}
+        initialChoices={modalConfig.choices}
+        pollIdToEdit={modalConfig.pollIdToEdit}
+        linkedField={modalConfig.linkedField}
+        initialEditState={modalConfig.initialEditState}
+      />
+      <TimePollModeModal
+        visible={isTimePollModeModalOpen}
+        onClose={() => setIsTimePollModeModalOpen(false)}
+        onChooseInviteesDecideDates={() => {
+          void createDateAvailabilityPoll();
+        }}
+        onChooseCreatorSelectsDates={() => {
+          setIsTimePollModeModalOpen(false);
+          openTimeAvailabilityModal();
+        }}
+        onChooseManual={() => {
+          setIsTimePollModeModalOpen(false);
+          openEditEvent();
+        }}
+      />
       <TimeAvailabilityModal visible={isTimeAvailabilityModalOpen} eventId={id as string} onClose={() => setIsTimeAvailabilityModalOpen(false)} />
-      <AvailabilityPickerModal
-        visible={isAvailabilityPickerOpen}
-        poll={availabilityPoll}
+      <DateAvailabilityPickerModal
+        visible={isAvailabilityPickerOpen && isDateAvailabilityPoll(availabilityPoll)}
+        poll={isDateAvailabilityPoll(availabilityPoll) ? availabilityPoll : null}
         currentUid={currentUid}
         onClose={() => {
           setIsAvailabilityPickerOpen(false);
           setAvailabilityPoll(null);
         }}
         onSave={handleSaveAvailability}
+      />
+      <AvailabilityPickerModal
+        visible={isAvailabilityPickerOpen && isTimeAvailabilityPoll(availabilityPoll)}
+        poll={isTimeAvailabilityPoll(availabilityPoll) ? availabilityPoll : null}
+        currentUid={currentUid}
+        onClose={() => {
+          setIsAvailabilityPickerOpen(false);
+          setAvailabilityPoll(null);
+        }}
+        onSave={handleSaveAvailability}
+      />
+      <FinalTimeSelectionModal
+        visible={!!tieBreakerPoll}
+        poll={tieBreakerPoll}
+        onClose={() => setTieBreakerPoll(null)}
+        onSelectSlot={handleSelectFinalTimeSlot}
       />
       <PollActionModal 
         isOpen={!!actionPoll} 
@@ -2003,7 +2837,7 @@ export default function EventScreen() {
       <ParticipantsModal
         visible={isParticipantsModalOpen}
         onClose={() => setIsParticipantsModalOpen(false)}
-        participantIds={participantIds}
+        participantIds={participantIds ?? []}
         roleAssignments={roleAssignments}
         organizerId={eventData?.organizerId}
         eventId={id as string}

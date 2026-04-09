@@ -31,6 +31,34 @@ export default function DashboardScreen() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
 
+  const openEvent = (event: EventData) => {
+    router.push({
+      pathname: '/event/[id]',
+      params: {
+        id: event.id,
+        title: event.title ?? '',
+        time: event.time ?? '',
+        location: event.location ?? '',
+        status: event.status ?? 'voting',
+        joinCode: event.joinCode ?? '',
+        organizerId: event.organizerId ?? '',
+      },
+    });
+  };
+
+  const openEditEvent = (event: EventData) => {
+    router.push({
+      pathname: '/edit/[id]',
+      params: {
+        id: event.id,
+        title: event.title ?? '',
+        time: event.time ?? '',
+        location: event.location ?? '',
+        status: event.status ?? 'voting',
+      },
+    });
+  };
+
   const handleConfirmAction = async () => {
     if (!actionEvent) return;
     setIsDeleting(true);
@@ -180,24 +208,28 @@ export default function DashboardScreen() {
                   key={event.id}
                   onPress={() => {
                     trackEvent('event_opened', { event_id: event.id });
-                    router.navigate(`/event/${event.id}`);
+                    openEvent(event);
                   }}
                   className="bg-zinc-800 p-5 rounded-2xl border border-zinc-700 active:bg-zinc-700"
                 >
                   <VStack className="gap-4">
                     {/* Header: Title, Join Code, and Action */}
-                    <HStack className="justify-between items-start">
-                      <VStack className="flex-1 mr-3 gap-1">
-                        <Text className="text-zinc-50 font-bold text-xl">{event.title}</Text>
-                        <HStack className="items-center gap-2 mt-1">
-                          <Text className="text-zinc-400 text-sm font-medium">Code:</Text>
-                          <Box className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-700">
-                            <Text className="text-zinc-300 font-mono text-xs font-bold tracking-widest">
-                              {event.joinCode ?? event.id}
-                            </Text>
-                          </Box>
-                        </HStack>
-                      </VStack>
+                    <HStack className="justify-between items-center gap-3">
+                      <Text
+                        className="text-zinc-50 font-bold text-xl flex-1"
+                        {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}
+                      >
+                        {event.title}
+                      </Text>
+
+                      <HStack className="items-center gap-2 shrink-0">
+                        <Text className="text-zinc-400 text-sm font-medium">Code:</Text>
+                        <Box className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-700">
+                          <Text className="text-zinc-300 font-mono text-xs font-bold tracking-widest">
+                            {event.joinCode ?? event.id}
+                          </Text>
+                        </Box>
+                      </HStack>
 
                       {/* --- 3. THE FIXED THREE DOT BUTTON --- */}
                       <TouchableOpacity
@@ -253,7 +285,13 @@ export default function DashboardScreen() {
         isEnding={isEnding}
         onClose={() => setActionEvent(null)}
         onEdit={(id) => {
+          const targetEvent = actionEvent && actionEvent.id === id ? actionEvent : events.find((event) => event.id === id);
           setActionEvent(null);
+          if (targetEvent) {
+            openEditEvent(targetEvent);
+            return;
+          }
+
           router.push(`/edit/${id}`);
         }}
         onConfirmAction={handleConfirmAction}

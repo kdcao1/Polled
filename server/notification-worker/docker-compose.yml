@@ -3,14 +3,19 @@ services:
     build:
       context: .
     container_name: polled-notification-worker
+    env_file:
+      - .env
     environment:
-      FIREBASE_PROJECT_ID: polled-f5b29
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
-      NOTIFICATION_WORKER_POLL_MS: "5000"
-      NOTIFICATION_WORKER_BATCH_SIZE: "10"
-      ANALYTICS_HTTP_PORT: "8787"
+      NOTIFICATION_WORKER_POLL_MS: ${NOTIFICATION_WORKER_POLL_MS:-5000}
+      NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-10}
+      ANALYTICS_HTTP_PORT: ${ANALYTICS_HTTP_PORT:-8787}
       ANALYTICS_SQLITE_PATH: /app/data/analytics.sqlite
     volumes:
-      - /absolute/path/on/host/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+      - type: bind
+        source: ${GOOGLE_APPLICATION_CREDENTIALS}
+        target: /run/secrets/firebase-service-account.json
+        read_only: true
       - ./data:/app/data
     restart: unless-stopped

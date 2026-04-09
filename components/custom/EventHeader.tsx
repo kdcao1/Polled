@@ -13,7 +13,7 @@ import { getEventStatusLabel, isEventEnded } from '@/utils/eventStatus';
 
 interface EventHeaderProps {
   eventData: any;
-  headcount: number;
+  headcount: number | null;
   isMobile: boolean;
   isOrganizer: boolean;
   joinLink: string;
@@ -25,11 +25,12 @@ interface EventHeaderProps {
   onBack: () => void;
   onShowQR: () => void;
   onOpenLinkedPoll: (field: 'time' | 'location') => void;
+  onResolveTimeTie?: () => void;
   onShowParticipants: () => void;
   onEditEvent: () => void;
 }
 
-export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, timeAvailabilityPoll, timeQuickPoll, locationQuickPoll, isQuickPollExpired, getQuickPollWinner, onBack, onShowQR, onOpenLinkedPoll, onShowParticipants, onEditEvent }: EventHeaderProps) {
+export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, timeAvailabilityPoll, timeQuickPoll, locationQuickPoll, isQuickPollExpired, getQuickPollWinner, onBack, onShowQR, onOpenLinkedPoll, onResolveTimeTie, onShowParticipants, onEditEvent }: EventHeaderProps) {
   const toast = useToast();
   const eventEnded = isEventEnded(eventData);
 
@@ -54,9 +55,30 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
     }
 
     if (field === 'time' && timeAvailabilityPoll) {
+      if (timeAvailabilityPoll.status === 'awaiting_selection') {
+        if (isOrganizer && onResolveTimeTie) {
+          return (
+            <Button
+              size="xs"
+              variant="outline"
+              className="border-zinc-600 bg-zinc-800 h-7 px-2"
+              onPress={onResolveTimeTie}
+            >
+              <ButtonText className="text-zinc-300 text-xs">Choose Final Time</ButtonText>
+            </Button>
+          );
+        }
+
+        return (
+          <Text className="text-amber-300 font-semibold text-right max-w-[160px]" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
+            Organizer choosing final time
+          </Text>
+        );
+      }
+
       return (
         <Text className="text-emerald-400 font-semibold text-right max-w-[160px]" {...(Platform.OS !== 'web' ? { numberOfLines: 2 } : {})}>
-          Currently polling
+          {timeAvailabilityPoll.availabilityMode === 'date' ? 'Date availability open' : 'Time availability open'}
         </Text>
       );
     }
@@ -197,7 +219,9 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
                   <Eye size={16} color="#a1a1aa" />
                 </TouchableOpacity>
               </HStack>
-              <Text className="text-zinc-50 font-semibold">{headcount} {headcount === 1 ? 'person' : 'people'}</Text>
+              <Text className="text-zinc-50 font-semibold">
+                {headcount == null ? '...' : `${headcount} ${headcount === 1 ? 'person' : 'people'}`}
+              </Text>
             </HStack>
           </VStack>
         </VStack>

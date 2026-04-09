@@ -27,21 +27,13 @@ https://polled.app
 ---
 
 ## TODO
-* change time selection to either people can enter blocks of available time or allow users to add a choice onto the time poll
 * test notifications
 * create admin panel
   * see analytics
   * control users
   * maintenance mode
   * flush stale events defined by no activity in n days
-* add `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` to `.env`
-* deploy Firestore rules
-* run the notification worker on your server
-* add Firebase service account JSON to Docker host and mount it into the worker container
-* configure APNs / EAS push credentials
 * replace `YOUR_APPLE_TEAM_ID` in `public/.well-known/apple-app-site-association`
-* replace `YOUR_RELEASE_SHA256_FINGERPRINT` in `public/.well-known/assetlinks.json`
-* verify both `.well-known` files are publicly served over HTTPS with no redirects
 
 ## Environment
 

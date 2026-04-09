@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
@@ -19,6 +19,11 @@ import {
   Timestamp,
   getFirestore,
 } from 'firebase-admin/firestore';
+
+const localEnvPath = resolve(process.cwd(), '.env');
+if (typeof process.loadEnvFile === 'function' && existsSync(localEnvPath)) {
+  process.loadEnvFile(localEnvPath);
+}
 
 const FIREBASE_PROJECT_ID =
   process.env.FIREBASE_PROJECT_ID?.trim() || process.env.GOOGLE_CLOUD_PROJECT?.trim() || '';

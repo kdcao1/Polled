@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import { useToast } from '@/components/ui/toast';
 import { useAuth } from '../hooks/useAuth';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Platform, View } from 'react-native';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../config/firebaseConfig';
 import { useNotifications } from '@/hooks/useNotifications';
@@ -128,7 +128,17 @@ export default function RootLayout() {
               <Stack.Screen name="join" options={{ title: 'Join Event', presentation: 'card' }} />
               <Stack.Screen name="debug" options={{ headerShown: false }} />
               <Stack.Screen name="event/[id]" options={{ title: 'Polled', headerLeft: () => null }} />
-              <Stack.Screen name="edit/[id]" options={{ title: 'Edit Event', presentation: 'modal' }} />
+              <Stack.Screen
+                name="edit/[id]"
+                options={{
+                  title: 'Edit Event',
+                  presentation: Platform.OS === 'web' ? 'transparentModal' : 'modal',
+                  animation: Platform.OS === 'web' ? 'none' : 'default',
+                  contentStyle: {
+                    backgroundColor: Platform.OS === 'web' ? 'transparent' : '#18181b',
+                  },
+                }}
+              />
             </Stack>
           </SafeAreaView>
         </GluestackUIProvider>

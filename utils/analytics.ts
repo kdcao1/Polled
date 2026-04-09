@@ -67,7 +67,7 @@ const enableDebugModeIfNeeded = () => {
   }
 
   // Configure GA's actual debug mode on the web runtime, not just a custom event param.
-  gtag('set', 'debug_mode', true);
+  gtag('set', { debug_mode: true });
   gtag('config', measurementId, { debug_mode: true });
   debugModeConfigured = true;
 };
@@ -106,7 +106,7 @@ const sendAnalyticsToServer = async (
 
   const currentUser = auth.currentUser;
   if (!currentUser) {
-    throw new Error('missing_auth_session');
+    return { attempted: false, sent: false, reason: 'missing_auth_session' as const };
   }
 
   const authToken = await currentUser.getIdToken();
@@ -239,8 +239,10 @@ const recordAnalytics = async (
         kind,
         name,
         finalParams,
-        isServerAnalyticsEnabled() ? 'failed' : 'local_only',
-        isServerAnalyticsEnabled() ? 'server_analytics_unavailable' : undefined
+        serverDelivery.attempted ? 'failed' : 'local_only',
+        serverDelivery.attempted
+          ? 'server_analytics_unavailable'
+          : 'missing_auth_session'
       )
     );
   } catch (error) {

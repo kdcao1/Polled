@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, ScrollView, Modal, TouchableOpacity, Pressable, Platform, ActionSheetIOS } from 'react-native';
+import { View, ScrollView, Modal, TouchableOpacity, Pressable, Platform, ActionSheetIOS, Text as RNText } from 'react-native';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
 import { Heading } from '@/components/ui/heading';
@@ -15,6 +15,20 @@ import { enqueueNotificationJob } from '@/utils/notificationJobs';
 
 type CreateItemType = 'poll' | 'role';
 type Step = 0 | 1 | 2;
+type PollModalDraft = {
+  step: Step;
+  createType: CreateItemType;
+  question: string;
+  choices: string[];
+  allowMultiple: boolean;
+  allowInviteeChoices: boolean;
+  endCondition: PollEndCondition;
+  durationHours: number;
+  targetVoteCount: string;
+  slotLimitMode: 'limited' | 'unlimited';
+  slotLimit: string;
+};
+type PollModalDraftKey = 'general' | 'linked:time' | 'linked:location';
 
 interface PollModalProps {
   visible: boolean;
@@ -24,6 +38,15 @@ interface PollModalProps {
   initialChoices?: string[];
   pollIdToEdit?: string;
   linkedField?: 'time' | 'location';
+  initialEditState?: {
+    createType: CreateItemType;
+    allowMultiple: boolean;
+    allowInviteeChoices: boolean;
+    endCondition: PollEndCondition;
+    targetVoteCount: string;
+    slotLimitMode: 'limited' | 'unlimited';
+    slotLimit: string;
+  };
 }
 
 const DURATION_OPTIONS = [
@@ -41,7 +64,16 @@ function createBlankChoices(count = 2) {
   return Array.from({ length: count }, () => '');
 }
 
-export default function PollModal({ visible, eventId, onClose, initialQuestion, initialChoices, pollIdToEdit, linkedField }: PollModalProps) {
+export default function PollModal({
+  visible,
+  eventId,
+  onClose,
+  initialQuestion,
+  initialChoices,
+  pollIdToEdit,
+  linkedField,
+  initialEditState,
+}: PollModalProps) {
   const [step, setStep] = useState<Step>(linkedField ? 1 : 0);
   const [createType, setCreateType] = useState<CreateItemType>(linkedField ? 'poll' : 'poll');
   const [question, setQuestion] = useState('');
@@ -58,6 +90,15 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
   const modalJourneyKeyRef = useRef('');
   const modalSaveCompletedRef = useRef(false);
   const wasVisibleRef = useRef(false);
+  const draftRef = useRef<Partial<Record<PollModalDraftKey, PollModalDraft>>>({});
+  const activeDraftKeyRef = useRef<PollModalDraftKey | null>(null);
+
+  const draftKey: PollModalDraftKey | null = pollIdToEdit
+    ? null
+    : linkedField
+      ? `linked:${linkedField}`
+      : 'general';
+  const shouldRememberDraft = draftKey !== null;
 
   const queueNotificationJob = async (type: 'poll_created' | 'role_created', title: string, body: string) => {
     try {
@@ -71,6 +112,36 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
       console.error('Error queueing notification job:', error);
     }
   };
+
+  const applyDraft = (draft: PollModalDraft) => {
+    setStep(draft.step);
+    setCreateType(draft.createType);
+    setQuestion(draft.question);
+    setChoices([...draft.choices]);
+    setAllowMultiple(draft.allowMultiple);
+    setAllowInviteeChoices(draft.allowInviteeChoices);
+    setEndCondition(draft.endCondition);
+    setDurationHours(draft.durationHours);
+    setTargetVoteCount(draft.targetVoteCount);
+    setSlotLimitMode(draft.slotLimitMode);
+    setSlotLimit(draft.slotLimit);
+    setIsDropdownOpen(false);
+    setIsSubmitting(false);
+  };
+
+  const buildDraft = (): PollModalDraft => ({
+    step,
+    createType,
+    question,
+    choices: [...choices],
+    allowMultiple,
+    allowInviteeChoices,
+    endCondition,
+    durationHours,
+    targetVoteCount,
+    slotLimitMode,
+    slotLimit,
+  });
 
   const resetForm = () => {
     setCreateType(linkedField ? 'poll' : 'poll');
@@ -90,9 +161,30 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
 
   useEffect(() => {
     if (!visible) return;
+    activeDraftKeyRef.current = draftKey;
 
     const loadEditingState = async () => {
+      if (draftKey && draftRef.current[draftKey]) {
+        applyDraft(draftRef.current[draftKey]!);
+        return;
+      }
+
       resetForm();
+
+      if (pollIdToEdit && initialEditState) {
+        setCreateType(initialEditState.createType);
+        setStep(2);
+        setQuestion(initialQuestion || '');
+        setChoices(initialChoices && initialChoices.length > 0 ? [...initialChoices] : createBlankChoices());
+        setAllowMultiple(initialEditState.allowMultiple);
+        setAllowInviteeChoices(initialEditState.allowInviteeChoices);
+        setEndCondition(initialEditState.endCondition);
+        setDurationHours(24);
+        setTargetVoteCount(initialEditState.targetVoteCount);
+        setSlotLimitMode(initialEditState.slotLimitMode);
+        setSlotLimit(initialEditState.slotLimit);
+        return;
+      }
 
       if (!pollIdToEdit) return;
 
@@ -125,7 +217,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
     };
 
     loadEditingState();
-  }, [visible, pollIdToEdit, eventId, initialQuestion, initialChoices, linkedField]);
+  }, [visible, pollIdToEdit, eventId, initialQuestion, initialChoices, linkedField, draftKey, initialEditState]);
 
   useEffect(() => {
     if (visible && !wasVisibleRef.current) {
@@ -140,6 +232,10 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
     }
 
     if (!visible && wasVisibleRef.current && modalJourneyKeyRef.current) {
+      if (activeDraftKeyRef.current && !modalSaveCompletedRef.current) {
+        draftRef.current[activeDraftKeyRef.current] = buildDraft();
+      }
+
       if (!modalSaveCompletedRef.current) {
         void abandonAnalyticsJourney(
           modalJourneyKeyRef.current,
@@ -156,12 +252,35 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
       }
 
       modalJourneyKeyRef.current = '';
+      activeDraftKeyRef.current = null;
     }
 
     wasVisibleRef.current = visible;
-  }, [visible, eventId, pollIdToEdit, linkedField, createType, step, question, choices]);
+  }, [
+    visible,
+    eventId,
+    pollIdToEdit,
+    linkedField,
+    createType,
+    step,
+    question,
+    choices,
+    allowMultiple,
+    allowInviteeChoices,
+    endCondition,
+    durationHours,
+    targetVoteCount,
+    slotLimitMode,
+    slotLimit,
+    draftKey,
+  ]);
 
   const handleClearForm = () => {
+    if (activeDraftKeyRef.current) {
+      delete draftRef.current[activeDraftKeyRef.current];
+    } else if (draftKey) {
+      delete draftRef.current[draftKey];
+    }
     resetForm();
   };
 
@@ -321,6 +440,11 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
       }
 
       modalSaveCompletedRef.current = true;
+      if (activeDraftKeyRef.current) {
+        delete draftRef.current[activeDraftKeyRef.current];
+      } else if (draftKey) {
+        delete draftRef.current[draftKey];
+      }
       if (modalJourneyKeyRef.current) {
         await clearAnalyticsJourney(modalJourneyKeyRef.current);
       }
@@ -562,19 +686,37 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
         <VStack className="gap-3">
           <Text className="text-zinc-300 font-bold ml-1">Choices</Text>
           {choices.map((choice, index) => (
-            <Input key={index} variant="outline" size="xl" className="border-zinc-700">
-              <InputField
-                placeholder={`Option ${index + 1}`}
-                placeholderTextColor="#52525b"
-                className="text-zinc-50"
-                value={choice}
-                onChangeText={(text) => {
-                  const updated = [...choices];
-                  updated[index] = text;
-                  setChoices(updated);
-                }}
-              />
-            </Input>
+            <HStack key={index} className="items-center gap-2">
+              <Input variant="outline" size="xl" className="flex-1 border-zinc-700">
+                <InputField
+                  placeholder={`Option ${index + 1}`}
+                  placeholderTextColor="#52525b"
+                  className="text-zinc-50"
+                  value={choice}
+                  onChangeText={(text) => {
+                    const updated = [...choices];
+                    updated[index] = text;
+                    setChoices(updated);
+                  }}
+                />
+              </Input>
+
+              {choices.length > 2 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  action="secondary"
+                  className={`border-zinc-700 bg-zinc-800 px-3 ${index < 2 ? 'opacity-40' : ''}`}
+                  isDisabled={index < 2}
+                  onPress={() => {
+                    if (index < 2) return;
+                    setChoices(choices.filter((_, choiceIndex) => choiceIndex !== index));
+                  }}
+                >
+                  <ButtonText className="text-zinc-300 font-bold">Remove</ButtonText>
+                </Button>
+              )}
+            </HStack>
           ))}
           <Button
             variant="outline"
@@ -596,7 +738,7 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
       : 'Create';
 
   return (
-    <Modal visible={visible} animationType="fade" transparent>
+    <Modal visible={visible} animationType={Platform.OS === 'web' ? 'none' : 'fade'} transparent>
       <View className="flex-1 justify-center items-center p-4">
         <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
         <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-md max-h-[90%] shadow-2xl z-10">
@@ -605,14 +747,58 @@ export default function PollModal({ visible, eventId, onClose, initialQuestion, 
               <Heading size="xl" className="text-zinc-50">{title}</Heading>
               <Text className="text-zinc-400 text-xs uppercase tracking-wider">Step {step + 1} of 3</Text>
             </VStack>
-            <HStack className="gap-2">
-              <Button size="sm" variant="link" onPress={handleClearForm}>
-                <ButtonText className="text-red-400 font-semibold">Clear</ButtonText>
-              </Button>
-              <Button size="sm" variant="link" onPress={onClose}>
-                <ButtonText className="text-zinc-400">Cancel</ButtonText>
-              </Button>
-            </HStack>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={handleClearForm}
+                style={{
+                  width: 52,
+                  height: 24,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <RNText
+                  style={{
+                    width: 52,
+                    color: '#f87171',
+                    fontSize: 14,
+                    lineHeight: 20,
+                    fontWeight: '600',
+                    includeFontPadding: false,
+                    textAlign: 'center',
+                    textAlignVertical: 'center',
+                  }}
+                >
+                  Clear
+                </RNText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={onClose}
+                style={{
+                  width: 52,
+                  height: 24,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <RNText
+                  style={{
+                    width: 52,
+                    color: '#a1a1aa',
+                    fontSize: 14,
+                    lineHeight: 20,
+                    fontWeight: '600',
+                    includeFontPadding: false,
+                    textAlign: 'center',
+                    textAlignVertical: 'center',
+                  }}
+                >
+                  Cancel
+                </RNText>
+              </TouchableOpacity>
+            </View>
           </HStack>
 
           <HStack className="gap-2 mb-6">
