@@ -1,9 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import admin from 'firebase-admin';
 
 function readServiceAccountJson() {
   const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY?.trim();
   const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+  const source = rawKey ? 'GOOGLE_SERVICE_ACCOUNT_KEY' : 'GOOGLE_APPLICATION_CREDENTIALS';
   const value = rawKey || credentialsPath;
 
   if (!value) {
@@ -13,6 +14,12 @@ function readServiceAccountJson() {
   }
 
   if (value.startsWith('{')) return value;
+
+  const stats = statSync(value);
+  if (stats.isDirectory()) {
+    throw new Error(`${source} points to a directory. Set it to the service account JSON file path, for example /home/kdcao/Documents/credentials.json.`);
+  }
+
   return readFileSync(value, 'utf8');
 }
 

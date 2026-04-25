@@ -89,7 +89,7 @@ export default function CalendarModal({
                     {isOpening === 'apple'
                       ? 'Opening...'
                       : Platform.OS === 'web'
-                        ? 'Download Apple Calendar File'
+                        ? 'Apple Calendar'
                         : Platform.OS === 'ios'
                           ? 'Apple Calendar'
                           : 'Calendar File (.ics)'}

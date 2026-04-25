@@ -32,6 +32,8 @@ services:
         source: ${GOOGLE_APPLICATION_CREDENTIALS:?Set GOOGLE_APPLICATION_CREDENTIALS to your Firebase service account JSON path}
         target: /run/secrets/firebase-service-account.json
         read_only: true
+        bind:
+          create_host_path: false
       - ./server/notification-worker/data:/app/data
     restart: unless-stopped
 
@@ -53,6 +55,8 @@ services:
         source: ${GOOGLE_APPLICATION_CREDENTIALS:?Set GOOGLE_APPLICATION_CREDENTIALS to your Firebase service account JSON path}
         target: /run/secrets/firebase-service-account.json
         read_only: true
+        bind:
+          create_host_path: false
       - ./server/notification-worker/data:/analytics:ro
     depends_on:
       - notification-worker

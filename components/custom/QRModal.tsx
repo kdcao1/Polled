@@ -31,7 +31,10 @@ export default function QRModal({ visible, onClose, eventData, joinLink }: QRMod
              )}
           </View>
 
-          <Text className="text-zinc-500 font-mono tracking-widest font-bold mb-6">
+          <Text
+            className="text-zinc-500 font-mono tracking-wider font-bold mb-6 text-xs text-center"
+            {...(Platform.OS !== 'web' ? { numberOfLines: 1 } : {})}
+          >
             CODE: {eventData?.joinCode}
           </Text>
 

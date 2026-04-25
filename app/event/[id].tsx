@@ -753,11 +753,11 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   const isMobilePicker = width < 768;
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [dragMode, setDragMode] = useState<'add' | 'remove'>('add');
   const [saving, setSaving] = useState(false);
   const [currentDateIndex, setCurrentDateIndex] = useState(0);
   const lastDraggedSlotRef = useRef<string | null>(null);
-  const mobileDragStartedRef = useRef(false);
+  const isDraggingRef = useRef(false);
+  const dragModeRef = useRef<'add' | 'remove'>('add');
   const mobileDragStartIndexRef = useRef<number | null>(null);
   const mobileDragStartPageYRef = useRef<number | null>(null);
   const dateKeys = Array.isArray(poll?.selectedDates) ? [...poll.selectedDates].sort() : [];
@@ -805,19 +805,11 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
     });
   };
 
-  const toggleSlot = (slotKey: string) => {
-    setSelectedSlots((current) =>
-      current.includes(slotKey)
-        ? current.filter((value) => value !== slotKey)
-        : [...current, slotKey]
-    );
-  };
-
   const handleSlotStart = (slotKey: string, slotIndex?: number, pageY?: number) => {
     const nextMode = selectedSlots.includes(slotKey) ? 'remove' : 'add';
-    setDragMode(nextMode);
+    isDraggingRef.current = true;
+    dragModeRef.current = nextMode;
     setIsDragging(true);
-    mobileDragStartedRef.current = true;
     lastDraggedSlotRef.current = slotKey;
     mobileDragStartIndexRef.current = slotIndex ?? null;
     mobileDragStartPageYRef.current = pageY ?? null;
@@ -825,22 +817,22 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   };
 
   const handleSlotEnter = (slotKey: string) => {
-    if (!isDragging) return;
+    if (!isDraggingRef.current) return;
     if (lastDraggedSlotRef.current === slotKey) return;
     lastDraggedSlotRef.current = slotKey;
-    mutateSlot(slotKey, dragMode);
+    mutateSlot(slotKey, dragModeRef.current);
   };
 
   const handleDragEnd = () => {
+    isDraggingRef.current = false;
     setIsDragging(false);
     lastDraggedSlotRef.current = null;
-    mobileDragStartedRef.current = false;
     mobileDragStartIndexRef.current = null;
     mobileDragStartPageYRef.current = null;
   };
 
   const handleMobileSlotMove = (moveY: number) => {
-    if (!isDragging || !currentDateKey) return;
+    if (!isDraggingRef.current || !currentDateKey) return;
     if (mobileDragStartIndexRef.current == null || mobileDragStartPageYRef.current == null) return;
 
     const step = MOBILE_SLOT_HEIGHT + MOBILE_SLOT_GAP;
@@ -858,14 +850,29 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   const availabilityPanResponder = useMemo(
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gestureState) => isDragging && Math.abs(gestureState.dy) > 2,
-      onMoveShouldSetPanResponderCapture: (_, gestureState) => isDragging && Math.abs(gestureState.dy) > 2,
+      onMoveShouldSetPanResponder: (_, gestureState) => isDraggingRef.current && Math.abs(gestureState.dy) > 2,
+      onMoveShouldSetPanResponderCapture: (_, gestureState) => isDraggingRef.current && Math.abs(gestureState.dy) > 2,
       onPanResponderMove: (_, gestureState) => handleMobileSlotMove(gestureState.moveY),
       onPanResponderRelease: handleDragEnd,
       onPanResponderTerminate: handleDragEnd,
     }),
-    [isDragging, currentDateKey, hours, dragMode]
+    [currentDateKey, hours]
   );
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !isDragging) return;
+
+    const endDrag = () => handleDragEnd();
+    window.addEventListener('mouseup', endDrag);
+    window.addEventListener('blur', endDrag);
+    document.addEventListener('mouseleave', endDrag);
+
+    return () => {
+      window.removeEventListener('mouseup', endDrag);
+      window.removeEventListener('blur', endDrag);
+      document.removeEventListener('mouseleave', endDrag);
+    };
+  }, [isDragging]);
 
   if (!poll) return null;
 
@@ -937,15 +944,9 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
                     return (
                       <Pressable
                         key={slotKey}
-                        delayLongPress={120}
-                        onLongPress={(event) => handleSlotStart(slotKey, index, event.nativeEvent.pageY)}
-                        onPress={() => {
-                          if (mobileDragStartedRef.current) {
-                            mobileDragStartedRef.current = false;
-                            return;
-                          }
-                          toggleSlot(slotKey);
-                        }}
+                        onPressIn={(event) => handleSlotStart(slotKey, index, event.nativeEvent.pageY)}
+                        onPressOut={handleDragEnd}
+                        onPress={() => undefined}
                         className={`self-center rounded-3xl border px-4 ${selected ? 'bg-emerald-600 border-emerald-500' : 'bg-zinc-800 border-zinc-700'}`}
                         style={{
                           width: MOBILE_SLOT_WIDTH,
@@ -1047,7 +1048,7 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
           {useSingleColumnPicker ? (
             <VStack className="pt-3 gap-2">
               <Text className="text-center text-zinc-500 text-xs">
-                Hold and drag to select multiple
+                Press and drag to select multiple
               </Text>
               <HStack className="items-center justify-between gap-3">
                 <Button
@@ -1784,8 +1785,11 @@ export default function EventScreen() {
       }
       // Note: If result.action === Share.dismissedAction, we do nothing (they just closed the menu)
 
-    } catch (error) {
-      // Show an error toast if the native share sheet fails to open
+    } catch {
+      // Some mobile share providers can surface an error even after opening the
+      // native sheet, so avoid showing a false failure toast there.
+      if (Platform.OS !== 'web') return;
+
       toast.show({
         placement: "top",
         render: ({ id: toastId }) => (
