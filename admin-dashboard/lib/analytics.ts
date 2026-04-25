@@ -20,6 +20,31 @@ type ActivityPoint = { date: string; oneDay: number; sevenDay: number; twentyEig
 type DauComparison = { labels: string[]; thisWeek: number[]; lastWeek: number[] };
 type RetentionPoint = { label: string; rate: number };
 type RetentionComparison = { thisWeek: RetentionPoint[]; lastWeek: RetentionPoint[] };
+export type ActionAnalyticsPoint = { action: string; count: number; users: number };
+export type TimeAnalyticsPoint = { metric: string; samples: number; averageSeconds: number; medianSeconds: number };
+export type TrackedEventInventoryPoint = {
+  name: string;
+  label: string;
+  category: string;
+  observedCount: number;
+  lastSeenAt: string | null;
+};
+export type RecentAnalyticsEvent = {
+  name: string;
+  label: string;
+  kind: string;
+  uid: string;
+  platform: string;
+  ingestedAt: string;
+  params: string;
+};
+export type AnalyticsIngestStatus = {
+  sqliteEnabled: boolean;
+  totalEvents: number;
+  eventsLast24h: number;
+  usersLast24h: number;
+  lastEventAt: string | null;
+};
 
 type AnalyticsRow = {
   uid: string | null;
@@ -42,6 +67,73 @@ type DatabaseInstance = {
 };
 
 type DatabaseSyncConstructor = new (databasePath: string) => DatabaseInstance;
+
+const TRACKED_EVENT_INVENTORY = [
+  ['screen_view', 'Navigation'],
+  ['landing_cta_clicked', 'Acquisition'],
+  ['dashboard_cta_clicked', 'Navigation'],
+  ['settings_opened', 'Navigation'],
+  ['event_opened', 'Navigation'],
+  ['event_action_menu_opened', 'Navigation'],
+  ['event_access_redirected_to_join', 'Navigation'],
+  ['onboarding_completed', 'Account'],
+  ['login_attempt', 'Account'],
+  ['login_success', 'Account'],
+  ['login_failed', 'Account'],
+  ['account_linked', 'Account'],
+  ['account_link_cancelled', 'Account'],
+  ['profile_updated', 'Account'],
+  ['logout', 'Account'],
+  ['donate_opened', 'Account'],
+  ['event_join_attempt', 'Join Flow'],
+  ['event_joined', 'Join Flow'],
+  ['event_join_failed', 'Join Flow'],
+  ['event_created', 'Event Lifecycle'],
+  ['event_updated', 'Event Lifecycle'],
+  ['event_edit_started', 'Event Lifecycle'],
+  ['event_removed_from_dashboard', 'Event Lifecycle'],
+  ['event_ended_manual', 'Event Lifecycle'],
+  ['event_restarted_manual', 'Event Lifecycle'],
+  ['event_exact_time_set', 'Event Lifecycle'],
+  ['event_shared', 'Sharing'],
+  ['event_code_copied', 'Sharing'],
+  ['qr_modal_opened', 'Sharing'],
+  ['calendar_modal_opened', 'Sharing'],
+  ['calendar_add_started', 'Sharing'],
+  ['participants_modal_opened', 'Event Participation'],
+  ['roles_tab_opened', 'Event Participation'],
+  ['item_create_started', 'Polls and Roles'],
+  ['feature_clicked', 'Polls and Roles'],
+  ['poll_created', 'Polls and Roles'],
+  ['poll_updated', 'Polls and Roles'],
+  ['poll_deleted', 'Polls and Roles'],
+  ['poll_loaded', 'Polls and Roles'],
+  ['poll_missed', 'Polls and Roles'],
+  ['poll_voted', 'Polls and Roles'],
+  ['poll_response_submitted', 'Polls and Roles'],
+  ['poll_choice_added_by_invitee', 'Polls and Roles'],
+  ['poll_edit_started', 'Polls and Roles'],
+  ['poll_rerun_started', 'Polls and Roles'],
+  ['poll_ended_early', 'Polls and Roles'],
+  ['role_created', 'Polls and Roles'],
+  ['role_updated', 'Polls and Roles'],
+  ['role_deleted', 'Polls and Roles'],
+  ['role_claimed', 'Polls and Roles'],
+  ['role_unclaimed', 'Polls and Roles'],
+  ['poll_nudged', 'Notifications'],
+  ['role_nudged', 'Notifications'],
+  ['availability_date_stage_completed', 'Availability'],
+  ['availability_time_stage_completed', 'Availability'],
+  ['availability_time_stage_tied', 'Availability'],
+  ['availability_time_tie_resolved', 'Availability'],
+  ['quick_poll_result_applied', 'Decision Timing'],
+  ['time_to_creation_measured', 'Decision Timing'],
+  ['time_to_vote_measured', 'Decision Timing'],
+  ['time_to_decision_measured', 'Decision Timing'],
+  ['results_dwell_time', 'Decision Timing'],
+  ['post_vote_refresh', 'Decision Timing'],
+  ['abandonment_node', 'Journey Health'],
+] as const;
 
 function hasFirebaseAdminKey() {
   return Boolean(
@@ -99,6 +191,19 @@ function rowEventId(row: AnalyticsRow) {
   const params = parseParams(row);
   const eventId = params.event_id;
   return typeof eventId === 'string' && eventId ? eventId : null;
+}
+
+function formatEventName(name: string) {
+  return name
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function numericParam(params: Record<string, unknown>, key: string) {
+  const value = params[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function uniqueUids(rows: AnalyticsRow[]) {
@@ -596,6 +701,121 @@ export async function fetchDAUComparison() {
 
 export async function fetchDay1Retention() {
   return hasFirebaseAdminKey() ? fetchFirebaseDay1Retention() : fetchLocalDay1Retention();
+}
+
+export async function fetchActionAnalytics(): Promise<ActionAnalyticsPoint[]> {
+  const ignored = new Set(['screen_view']);
+  const counts = new Map<string, { count: number; users: Set<string> }>();
+
+  for (const row of localRowsSince(28)) {
+    if (row.kind !== 'event' || ignored.has(row.name)) continue;
+    const entry = counts.get(row.name) ?? { count: 0, users: new Set<string>() };
+    entry.count += 1;
+    if (row.uid) entry.users.add(row.uid);
+    counts.set(row.name, entry);
+  }
+
+  return Array.from(counts.entries())
+    .sort(([, a], [, b]) => b.count - a.count)
+    .slice(0, 18)
+    .map(([action, stats]) => ({
+      action: formatEventName(action),
+      count: stats.count,
+      users: stats.users.size,
+    }));
+}
+
+export async function fetchTimeAnalytics(): Promise<TimeAnalyticsPoint[]> {
+  const samples = new Map<string, number[]>();
+
+  for (const row of localRowsSince(28)) {
+    const params = parseParams(row);
+    const seconds = numericParam(params, 'duration_seconds');
+    if (seconds === null) continue;
+
+    const label = formatEventName(row.name);
+    samples.set(label, samples.get(label) ?? []);
+    samples.get(label)!.push(seconds);
+  }
+
+  return Array.from(samples.entries())
+    .map(([metric, values]) => {
+      const sorted = [...values].sort((a, b) => a - b);
+      const midpoint = Math.floor(sorted.length / 2);
+      const medianSeconds =
+        sorted.length % 2 === 0
+          ? (sorted[midpoint - 1] + sorted[midpoint]) / 2
+          : sorted[midpoint];
+      const averageSeconds = values.reduce((sum, value) => sum + value, 0) / values.length;
+
+      return {
+        metric,
+        samples: values.length,
+        averageSeconds: Number(averageSeconds.toFixed(1)),
+        medianSeconds: Number(medianSeconds.toFixed(1)),
+      };
+    })
+    .sort((a, b) => b.samples - a.samples)
+    .slice(0, 12);
+}
+
+export async function fetchAnalyticsIngestStatus(): Promise<AnalyticsIngestStatus> {
+  const rows = getLocalRows();
+  const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const recentRows = rows.filter((row) => {
+    const date = rowDate(row);
+    return date && date >= cutoff24h;
+  });
+
+  return {
+    sqliteEnabled: existsSync(getSqlitePath()),
+    totalEvents: rows.length,
+    eventsLast24h: recentRows.length,
+    usersLast24h: uniqueUids(recentRows).size,
+    lastEventAt: rows[0]?.ingested_at ?? null,
+  };
+}
+
+export async function fetchTrackedEventInventory(): Promise<TrackedEventInventoryPoint[]> {
+  const rows = getLocalRows();
+  const observed = new Map<string, { count: number; lastSeenAt: string | null }>();
+
+  for (const row of rows) {
+    const current = observed.get(row.name) ?? { count: 0, lastSeenAt: null };
+    current.count += 1;
+    if (!current.lastSeenAt) current.lastSeenAt = row.ingested_at;
+    observed.set(row.name, current);
+  }
+
+  const inventory = new Map<string, string>();
+  for (const [name, category] of TRACKED_EVENT_INVENTORY) inventory.set(name, category);
+  for (const name of Array.from(observed.keys())) {
+    if (!inventory.has(name)) inventory.set(name, 'Observed Only');
+  }
+
+  return Array.from(inventory.entries())
+    .map(([name, category]) => ({
+      name,
+      label: formatEventName(name),
+      category,
+      observedCount: observed.get(name)?.count ?? 0,
+      lastSeenAt: observed.get(name)?.lastSeenAt ?? null,
+    }))
+    .sort((a, b) => a.category.localeCompare(b.category) || a.label.localeCompare(b.label));
+}
+
+export async function fetchRecentAnalyticsEvents(limit = 60): Promise<RecentAnalyticsEvent[]> {
+  return getLocalRows()
+    .slice(0, limit)
+    .map((row) => ({
+      name: row.name,
+      label: formatEventName(row.name),
+      kind: row.kind,
+      uid: row.uid ? row.uid.slice(0, 8) : 'unknown',
+      platform: row.platform || 'unknown',
+      ingestedAt: row.ingested_at,
+      params: JSON.stringify(parseParams(row)),
+    }));
 }
 
 export function getAnalyticsSourceLabel() {
