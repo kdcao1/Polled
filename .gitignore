@@ -40,3 +40,4 @@ server/notification-worker/node_modules/
 *.tsbuildinfo
 Polled.code-workspace
 google-services.json
+*.sqlite
