@@ -18,6 +18,7 @@ export interface EventData {
   status: string;
   scheduledAt?: string | null;
   joinCode?: string;
+  identityRequirement?: 'none' | 'linked_account';
   organizerId?: string;
   summary?: PollSummary;
 }

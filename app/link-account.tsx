@@ -17,9 +17,16 @@ import { googleAuthConfig, hasGoogleAuthConfig } from '@/config/env';
 
 export default function LinkAccountScreen() {
   const router = useRouter();
-  const { next } = useLocalSearchParams();
+  const { next, reason } = useLocalSearchParams();
   const user = auth.currentUser;
   const toast = useToast();
+  const nextPath = typeof next === 'string' ? next : '';
+  const isLinkedAccountRequired = reason === 'linked_account_required';
+  const cancelPath = nextPath.startsWith('/join')
+    ? nextPath
+    : nextPath.startsWith('/event/')
+      ? '/dashboard'
+      : '/dashboard';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -69,8 +76,8 @@ export default function LinkAccountScreen() {
       trackEvent('account_linked', { method: 'google' });
       
       showToast('Account Secured!', 'Your account is now linked to Google.', 'success');
-      if (typeof next === 'string') {
-        router.replace(next as any);
+      if (nextPath) {
+        router.replace(nextPath as any);
       } else {
         router.back();
       }
@@ -100,8 +107,8 @@ export default function LinkAccountScreen() {
       trackEvent('account_linked', { method: 'email' });
       
       showToast('Account Secured!', 'Your email and password have been saved.', 'success');
-      if (typeof next === 'string') {
-        router.replace(next as any);
+      if (nextPath) {
+        router.replace(nextPath as any);
       } else {
         router.back();
       }
@@ -118,6 +125,13 @@ export default function LinkAccountScreen() {
     }
   };
 
+  const handleCancel = () => {
+    trackEvent('account_link_cancelled', {
+      reason: isLinkedAccountRequired ? 'linked_account_required' : 'optional',
+    });
+    router.replace(cancelPath as any);
+  };
+
   return (
     <KeyboardAvoidingView 
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
@@ -127,9 +141,13 @@ export default function LinkAccountScreen() {
         <VStack className="gap-6 w-full max-w-sm">
           
           <VStack className="gap-2 text-center items-center mb-2">
-            <Heading size="2xl" className="text-zinc-50">Secure Account</Heading>
+            <Heading size="2xl" className="text-zinc-50">
+              {isLinkedAccountRequired ? 'Account Required' : 'Secure Account'}
+            </Heading>
             <Text className="text-zinc-400 text-center">
-              Link an account to save your events and log in from other devices.
+              {isLinkedAccountRequired
+                ? 'The organizer requires a linked Google or email account before you can join or vote in this event.'
+                : 'Link an account to save your events and log in from other devices.'}
             </Text>
           </VStack>
 
@@ -198,7 +216,7 @@ export default function LinkAccountScreen() {
             <Button 
               size="xl" 
               variant="link" 
-              onPress={() => router.back()}
+              onPress={handleCancel}
               isDisabled={isLinking}
             >
               <ButtonText className="text-zinc-400">Cancel</ButtonText>

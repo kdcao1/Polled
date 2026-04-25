@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import { createTooltip } from '@gluestack-ui/core/tooltip/creator';
-import { View, Text, ViewStyle } from 'react-native';
+import { View, Text, ViewStyle, Platform } from 'react-native';
 import type { VariantProps } from '@gluestack-ui/utils/nativewind-utils';
 import { tva } from '@gluestack-ui/utils/nativewind-utils';
 import { withStyleContext } from '@gluestack-ui/utils/nativewind-utils';
@@ -98,7 +98,7 @@ const Tooltip = React.forwardRef<
 const TooltipContent = React.forwardRef<
   React.ComponentRef<typeof UITooltip.Content>,
   ITooltipContentProps & { className?: string }
->(function TooltipContent({ className, ...props }, ref) {
+>(function TooltipContent({ className, style, ...props }, ref) {
   return (
     <UITooltip.Content
       ref={ref}
@@ -106,7 +106,8 @@ const TooltipContent = React.forwardRef<
       className={tooltipContentStyle({
         class: className,
       })}
-      pointerEvents="auto"
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'auto' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'auto' as const } : null]}
     />
   );
 });

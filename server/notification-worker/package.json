@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
+    "prestart": "npm run build",
     "start": "node lib/index.js",
     "lint": "tsc --noEmit"
   },

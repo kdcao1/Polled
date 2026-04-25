@@ -11,10 +11,12 @@ type Props = {
   currentUid: string | undefined;
   isDeleting: boolean;
   isEnding: boolean;
+  isRestarting: boolean;
   onClose: () => void;
   onEdit: (eventId: string) => void;
   onConfirmAction: () => void;
   onEndEvent: () => void;
+  onRestartEvent: () => void;
 };
 
 export default function EventActionModal({ 
@@ -22,13 +24,15 @@ export default function EventActionModal({
   currentUid, 
   isDeleting, 
   isEnding,
+  isRestarting,
   onClose, 
   onEdit, 
   onConfirmAction,
   onEndEvent,
+  onRestartEvent,
 }: Props) {
   
-  const [confirmMode, setConfirmMode] = useState<'remove' | 'end' | null>(null);
+  const [confirmMode, setConfirmMode] = useState<'remove' | 'end' | 'restart' | null>(null);
 
   useEffect(() => {
     if (!event) {
@@ -40,7 +44,7 @@ export default function EventActionModal({
 
   const isOrganizer = event.organizerId === currentUid;
   const isEnded = event.status === 'ended';
-  const isBusy = isDeleting || isEnding;
+  const isBusy = isDeleting || isEnding || isRestarting;
 
   const handleClose = () => {
     setConfirmMode(null);
@@ -99,6 +103,18 @@ export default function EventActionModal({
                   </Button>
                 )}
 
+                {isOrganizer && isEnded && (
+                  <Button
+                    size="xl"
+                    variant="outline"
+                    className="border-emerald-500/30 bg-emerald-500/10 w-full"
+                    onPress={() => setConfirmMode('restart')}
+                    isDisabled={isBusy}
+                  >
+                    <ButtonText className="font-bold text-emerald-300">Restart Event</ButtonText>
+                  </Button>
+                )}
+
                 <Button 
                   size="xl" 
                   variant="outline" 
@@ -116,14 +132,16 @@ export default function EventActionModal({
                 <Button 
                   size="xl" 
                   action="primary" 
-                  className={`${confirmMode === 'end' ? 'bg-amber-500' : 'bg-red-600'} border-0 w-full`}
-                  onPress={confirmMode === 'end' ? onEndEvent : onConfirmAction}
+                  className={`${confirmMode === 'end' ? 'bg-amber-500' : confirmMode === 'restart' ? 'bg-emerald-600' : 'bg-red-600'} border-0 w-full`}
+                  onPress={confirmMode === 'end' ? onEndEvent : confirmMode === 'restart' ? onRestartEvent : onConfirmAction}
                   isDisabled={isBusy}
                 >
                   {isBusy ? <ButtonSpinner color="white" /> : (
                     <ButtonText className="font-bold text-white">
                       {confirmMode === 'end'
                         ? 'Yes, End Event'
+                        : confirmMode === 'restart'
+                          ? 'Yes, Restart Event'
                         : `Yes, ${isOrganizer ? 'Delete' : 'Leave'}`}
                     </ButtonText>
                   )}

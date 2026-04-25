@@ -1,6 +1,6 @@
 'use client';
 import React from 'react';
-import { Text, View, StyleSheet } from 'react-native';
+import { Text, View, StyleSheet, Platform } from 'react-native';
 
 type ToastPlacement =
   | 'top'
@@ -121,15 +121,26 @@ export function ToastProvider({ children }: { children?: React.ReactNode }) {
   return (
     <ToastContext.Provider value={contextValue}>
       {children}
-      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <View
+        {...(Platform.OS !== 'web' ? { pointerEvents: 'none' as const } : {})}
+        style={[StyleSheet.absoluteFill, Platform.OS === 'web' ? { pointerEvents: 'none' as const } : null]}
+      >
         {(Object.keys(groupedToasts) as ToastPlacement[]).map((placement) => (
           <View
             key={placement}
-            pointerEvents="none"
-            style={[styles.placementContainer, placementStyles[placement]]}
+            {...(Platform.OS !== 'web' ? { pointerEvents: 'none' as const } : {})}
+            style={[
+              styles.placementContainer,
+              placementStyles[placement],
+              Platform.OS === 'web' ? { pointerEvents: 'none' as const } : null,
+            ]}
           >
             {groupedToasts[placement].map((toast) => (
-              <View key={toast.id} pointerEvents="none" style={styles.toastWrapper}>
+              <View
+                key={toast.id}
+                {...(Platform.OS !== 'web' ? { pointerEvents: 'none' as const } : {})}
+                style={[styles.toastWrapper, Platform.OS === 'web' ? { pointerEvents: 'none' as const } : null]}
+              >
                 {toast.node}
               </View>
             ))}
@@ -155,10 +166,18 @@ type BaseToastProps = React.ComponentProps<typeof View> & {
 };
 
 const Toast = React.forwardRef<View, BaseToastProps>(function Toast(
-  { className, pointerEvents = 'none', ...props },
+  { className, pointerEvents = 'none', style, ...props },
   ref
 ) {
-  return <View ref={ref} pointerEvents={pointerEvents} className={className} {...props} />;
+  return (
+    <View
+      ref={ref}
+      {...(Platform.OS !== 'web' ? { pointerEvents } : {})}
+      className={className}
+      style={[style, Platform.OS === 'web' ? { pointerEvents } : null]}
+      {...props}
+    />
+  );
 });
 
 type BaseTextProps = React.ComponentProps<typeof Text> & {

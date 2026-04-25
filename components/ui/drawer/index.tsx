@@ -7,6 +7,7 @@ import {
   ScrollView,
   Dimensions,
   ViewStyle,
+  Platform,
 } from 'react-native';
 import {
   Motion,
@@ -182,12 +183,13 @@ type IDrawerCloseButtonProps = React.ComponentProps<
 const Drawer = React.forwardRef<
   React.ComponentRef<typeof UIDrawer>,
   IDrawerProps
->(function Drawer({ className, size = 'sm', anchor = 'left', ...props }, ref) {
+>(function Drawer({ className, size = 'sm', anchor = 'left', style, ...props }, ref) {
   return (
     <UIDrawer
       ref={ref}
       {...props}
-      pointerEvents="box-none"
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'box-none' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'box-none' as const } : null]}
       className={drawerStyle({ size, anchor, class: className })}
       context={{ size, anchor }}
     />
@@ -230,7 +232,7 @@ const DrawerBackdrop = React.forwardRef<
 const DrawerContent = React.forwardRef<
   React.ComponentRef<typeof UIDrawer.Content>,
   IDrawerContentProps
->(function DrawerContent({ className, ...props }, ref) {
+>(function DrawerContent({ className, style, ...props }, ref) {
   const { size: parentSize, anchor: parentAnchor } = useStyleContext(SCOPE);
 
   const drawerHeight = screenHeight * (sizes[parentSize] || sizes.md);
@@ -270,7 +272,8 @@ const DrawerContent = React.forwardRef<
         },
         class: `${className} ${customClass}`,
       })}
-      pointerEvents="auto"
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'auto' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'auto' as const } : null]}
     />
   );
 });

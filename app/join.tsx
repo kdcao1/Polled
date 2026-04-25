@@ -6,7 +6,7 @@ import { Text } from '@/components/ui/text';
 import { Input, InputField } from '@/components/ui/input';
 import { Button, ButtonText } from '@/components/ui/button';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { getDocFromServer, doc, setDoc, arrayUnion, serverTimestamp, deleteDoc } from 'firebase/firestore';
+import { getDocFromServer, doc, arrayUnion, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { KeyboardAvoidingView, Platform } from 'react-native';
 import { db, auth } from '../config/firebaseConfig';
 import { abandonAnalyticsJourney, clearAnalyticsJourney, continueAnalyticsJourney, ensureAnalyticsJourneyStarted, trackEvent } from '@/utils/analytics';
@@ -67,7 +67,7 @@ export default function JoinScreen() {
       if (joinCodeIdentityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
         trackEvent('event_join_failed', { reason: 'linked_account_required' });
         setIsJoining(false);
-        router.replace(`/link-account?next=${encodeURIComponent(`/join?code=${code}`)}`);
+        router.replace(`/link-account?next=${encodeURIComponent(`/join?code=${code}`)}&reason=linked_account_required`);
         return;
       }
 
@@ -96,7 +96,7 @@ export default function JoinScreen() {
       if (identityRequirement === 'linked_account' && auth.currentUser?.isAnonymous) {
         trackEvent('event_join_failed', { reason: 'linked_account_required' });
         setIsJoining(false);
-        router.replace(`/link-account?next=${encodeURIComponent(`/join?code=${code}`)}`);
+        router.replace(`/link-account?next=${encodeURIComponent(`/join?code=${code}`)}&reason=linked_account_required`);
         return;
       }
 
@@ -104,32 +104,20 @@ export default function JoinScreen() {
       const userRef = doc(db, 'users', auth.currentUser.uid);
       const memberRef = doc(db, 'events', secureEventId, 'members', auth.currentUser.uid);
       try {
-        await setDoc(memberRef, {
+        const batch = writeBatch(db);
+        batch.set(memberRef, {
           uid: auth.currentUser.uid,
           joinedAt: serverTimestamp(),
           role: 'participant',
         }, { merge: true });
-      } catch (error) {
-        console.error("Error creating event membership:", error);
-        trackEvent('event_join_failed', { reason: 'member_write_denied' });
-        setErrorMsg("We couldn't add you to that event.");
-        setIsJoining(false);
-        return;
-      }
-
-      try {
-        await setDoc(userRef, {
+        batch.set(userRef, {
           joinedEvents: arrayUnion(secureEventId)
         }, { merge: true });
+        await batch.commit();
       } catch (error) {
-        console.error("Error saving joined event to user profile:", error);
-        try {
-          await deleteDoc(memberRef);
-        } catch (rollbackError) {
-          console.error("Error rolling back failed join membership:", rollbackError);
-        }
-        trackEvent('event_join_failed', { reason: 'user_dashboard_write_denied' });
-        setErrorMsg("We couldn't save that event to your dashboard.");
+        console.error("Error saving event membership:", error);
+        trackEvent('event_join_failed', { reason: 'membership_write_denied' });
+        setErrorMsg("We couldn't add that event to your dashboard.");
         setIsJoining(false);
         return;
       }

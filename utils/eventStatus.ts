@@ -12,7 +12,11 @@ export function parseScheduledEventDate(value?: string | null): Date | null {
 
 export function getScheduledEventDate(event: any): Date | null {
   if (event?.scheduledAt) {
-    const scheduledDate = new Date(event.scheduledAt);
+    const scheduledDate =
+      typeof event.scheduledAt?.toDate === 'function'
+        ? event.scheduledAt.toDate()
+        : new Date(event.scheduledAt);
+
     if (!Number.isNaN(scheduledDate.getTime())) {
       return scheduledDate;
     }

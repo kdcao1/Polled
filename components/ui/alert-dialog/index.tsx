@@ -15,7 +15,7 @@ import {
   createMotionAnimatedComponent,
   MotionComponentProps,
 } from '@legendapp/motion';
-import { View, Pressable, ScrollView, ViewStyle } from 'react-native';
+import { View, Pressable, ScrollView, ViewStyle, Platform } from 'react-native';
 
 const SCOPE = 'ALERT_DIALOG';
 
@@ -129,14 +129,15 @@ type IAlertDialogBackdropProps = React.ComponentPropsWithoutRef<
 const AlertDialog = React.forwardRef<
   React.ComponentRef<typeof UIAccessibleAlertDialog>,
   IAlertDialogProps
->(function AlertDialog({ className, size = 'md', ...props }, ref) {
+>(function AlertDialog({ className, size = 'md', style, ...props }, ref) {
   return (
     <UIAccessibleAlertDialog
       ref={ref}
       {...props}
       className={alertDialogStyle({ class: className })}
       context={{ size }}
-      pointerEvents="box-none"
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'box-none' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'box-none' as const } : null]}
     />
   );
 });
@@ -144,12 +145,11 @@ const AlertDialog = React.forwardRef<
 const AlertDialogContent = React.forwardRef<
   React.ComponentRef<typeof UIAccessibleAlertDialog.Content>,
   IAlertDialogContentProps
->(function AlertDialogContent({ className, size, ...props }, ref) {
+>(function AlertDialogContent({ className, size, style, ...props }, ref) {
   const { size: parentSize } = useStyleContext(SCOPE);
 
   return (
     <UIAccessibleAlertDialog.Content
-      pointerEvents="auto"
       ref={ref}
       initial={{
         scale: 0.9,
@@ -180,6 +180,8 @@ const AlertDialogContent = React.forwardRef<
         size,
         class: className,
       })}
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'auto' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'auto' as const } : null]}
     />
   );
 });

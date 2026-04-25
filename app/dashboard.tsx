@@ -17,6 +17,7 @@ import EventSummaryBadge from '@/components/custom/EventSummaryBadge'; // Ensure
 import { ensureAnalyticsJourneyStarted, trackEvent } from '@/utils/analytics';
 import { getEventStatusLabel } from '@/utils/eventStatus';
 import { deleteEventCompletely } from '@/utils/eventDeletion';
+import { ensureJoinCodeForEvent } from '@/utils/joinCodes';
 
 export default function DashboardScreen() {
   const { events, loading, removeEvent, updateEvent } = useDashboard();
@@ -30,6 +31,7 @@ export default function DashboardScreen() {
   const [actionEvent, setActionEvent] = useState<EventData | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
 
   const openEvent = (event: EventData) => {
     router.push({
@@ -54,6 +56,8 @@ export default function DashboardScreen() {
         title: event.title ?? '',
         time: event.time ?? '',
         location: event.location ?? '',
+        joinCode: event.joinCode ?? '',
+        identityRequirement: event.identityRequirement === 'linked_account' ? 'linked_account' : 'none',
         status: event.status ?? 'voting',
       },
     });
@@ -125,6 +129,51 @@ export default function DashboardScreen() {
       });
     } finally {
       setIsEnding(false);
+    }
+  };
+
+  const handleRestartEvent = async () => {
+    if (!actionEvent || actionEvent.organizerId !== currentUid || actionEvent.status !== 'ended') return;
+    setIsRestarting(true);
+
+    try {
+      await updateDoc(doc(db, 'events', actionEvent.id), {
+        status: 'voting',
+        endedAt: null,
+        scheduledAt: null,
+      });
+      const joinCode = await ensureJoinCodeForEvent(actionEvent.id, actionEvent);
+
+      updateEvent(actionEvent.id, { status: 'voting', scheduledAt: null, joinCode });
+      trackEvent('event_restarted_manual', { event_id: actionEvent.id, source: 'dashboard_menu' });
+      setActionEvent(null);
+
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-green-400 font-bold text-sm">Event Restarted</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Voting is open again.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+    } catch (error) {
+      console.error('Error restarting event:', error);
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-red-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-red-400 font-bold text-sm">Could not restart event</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Please try again in a moment.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+    } finally {
+      setIsRestarting(false);
     }
   };
 
@@ -283,6 +332,7 @@ export default function DashboardScreen() {
         currentUid={currentUid}
         isDeleting={isDeleting}
         isEnding={isEnding}
+        isRestarting={isRestarting}
         onClose={() => setActionEvent(null)}
         onEdit={(id) => {
           const targetEvent = actionEvent && actionEvent.id === id ? actionEvent : events.find((event) => event.id === id);
@@ -296,6 +346,7 @@ export default function DashboardScreen() {
         }}
         onConfirmAction={handleConfirmAction}
         onEndEvent={handleEndEvent}
+        onRestartEvent={handleRestartEvent}
       />
 
     </Box>

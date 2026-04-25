@@ -1,6 +1,6 @@
 'use client';
 import React from 'react';
-import { View, Pressable, ScrollView, ViewStyle } from 'react-native';
+import { View, Pressable, ScrollView, ViewStyle, Platform } from 'react-native';
 import {
   Motion,
   createMotionAnimatedComponent,
@@ -153,7 +153,7 @@ const Popover = React.forwardRef<
   React.ComponentRef<typeof UIPopover>,
   IPopoverProps
 >(function Popover(
-  { className, size = 'md', placement = 'bottom', ...props },
+  { className, size = 'md', placement = 'bottom', style, ...props },
   ref
 ) {
   return (
@@ -163,7 +163,8 @@ const Popover = React.forwardRef<
       {...props}
       className={popoverStyle({ size, class: className })}
       context={{ size, placement }}
-      pointerEvents="box-none"
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'box-none' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'box-none' as const } : null]}
     />
   );
 });
@@ -171,7 +172,7 @@ const Popover = React.forwardRef<
 const PopoverContent = React.forwardRef<
   React.ComponentRef<typeof UIPopover.Content>,
   IPopoverContentProps
->(function PopoverContent({ className, size, ...props }, ref) {
+>(function PopoverContent({ className, size, style, ...props }, ref) {
   const { size: parentSize } = useStyleContext(SCOPE);
 
   return (
@@ -196,7 +197,8 @@ const PopoverContent = React.forwardRef<
         size,
         class: className,
       })}
-      pointerEvents="auto"
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'auto' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'auto' as const } : null]}
     />
   );
 });

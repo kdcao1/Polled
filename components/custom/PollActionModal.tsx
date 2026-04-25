@@ -28,11 +28,18 @@ export default function PollActionModal({
 
   if (!isOpen || !poll) return null;
 
+  const isAvailabilityPoll = poll.type === 'availability';
   const itemType = getEventItemType(poll);
-  const itemLabel = itemType === 'role' ? 'Role' : 'Poll';
-  const isExpired = itemType === 'role'
-    ? (poll.slotLimit != null && (poll.options?.[0]?.voterIds?.length ?? 0) >= poll.slotLimit)
-    : (poll.expiresAt && new Date() > (poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt)));
+  const itemLabel = isAvailabilityPoll
+    ? 'Availability Poll'
+    : itemType === 'role'
+      ? 'Role'
+      : 'Poll';
+  const isExpired = isAvailabilityPoll
+    ? poll.status !== 'active'
+    : itemType === 'role'
+      ? (poll.slotLimit != null && (poll.options?.[0]?.voterIds?.length ?? 0) >= poll.slotLimit)
+      : (poll.expiresAt && new Date() > (poll.expiresAt?.toDate ? poll.expiresAt.toDate() : new Date(poll.expiresAt)));
 
   return (
     <Modal
@@ -53,11 +60,13 @@ export default function PollActionModal({
                 </Text>
               </VStack>
               
-              <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onEdit(poll); }}>
-                <ButtonText className="font-bold text-zinc-50">Edit {itemLabel}</ButtonText>
-              </Button>
+              {!isAvailabilityPoll && (
+                <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onEdit(poll); }}>
+                  <ButtonText className="font-bold text-zinc-50">Edit {itemLabel}</ButtonText>
+                </Button>
+              )}
               
-              {itemType === 'poll' && (
+              {itemType === 'poll' && !isAvailabilityPoll && (
                 <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => { onClose(); onRerun(poll); }}>
                   <ButtonText className="font-bold text-zinc-50">Rerun Poll</ButtonText>
                 </Button>
@@ -71,7 +80,9 @@ export default function PollActionModal({
 
                   {itemType === 'poll' && (
                     <Button size="xl" variant="outline" className="border-zinc-600 bg-zinc-800 w-full" onPress={() => setShowConfirmEnd(true)}>
-                      <ButtonText className="font-bold text-zinc-50">End Early</ButtonText>
+                      <ButtonText className="font-bold text-zinc-50">
+                        {isAvailabilityPoll ? 'End Now' : 'End Early'}
+                      </ButtonText>
                     </Button>
                   )}
                 </>
@@ -98,8 +109,14 @@ export default function PollActionModal({
             </>
           ) : (
             <>
-              <Heading size="xl" className="text-zinc-50 mb-2 text-center">End Poll Early?</Heading>
-              <Text className="text-center text-zinc-400 mb-4">This will stop accepting new votes and show final results immediately.</Text>
+              <Heading size="xl" className="text-zinc-50 mb-2 text-center">
+                {isAvailabilityPoll ? 'Finalize Availability?' : 'End Poll Early?'}
+              </Heading>
+              <Text className="text-center text-zinc-400 mb-4">
+                {isAvailabilityPoll
+                  ? 'This will stop accepting availability and move the event to the next time step.'
+                  : 'This will stop accepting new votes and show final results immediately.'}
+              </Text>
               <Button size="xl" action="primary" className="bg-blue-600 border-0 w-full" onPress={() => { onClose(); onEndEarly(poll); }}>
                 <ButtonText className="font-bold text-white">Yes, End Now</ButtonText>
               </Button>

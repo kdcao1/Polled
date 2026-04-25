@@ -1,0 +1,45 @@
+# Keep EAS uploads aligned with .gitignore, but include files required by
+# remote native builds.
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env
+.env*.local
+server/notification-worker/lib/
+server/notification-worker/node_modules/
+
+# typescript
+*.tsbuildinfo
+Polled.code-workspace
+
+# Android Firebase config is referenced by app.json and must be uploaded to EAS.
+!google-services.json
