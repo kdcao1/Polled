@@ -41,3 +41,4 @@ server/notification-worker/node_modules/
 Polled.code-workspace
 google-services.json
 *.sqlite
+.claude/settings.local.json
