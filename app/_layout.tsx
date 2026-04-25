@@ -49,7 +49,7 @@ function readMaintenanceState(snapshot: DocumentSnapshot): MaintenanceState {
 
 function maintenanceStatusUrl() {
   if (maintenanceConfig.statusUrl) return maintenanceConfig.statusUrl;
-  if (__DEV__ && Platform.OS === 'web') return 'http://localhost:3000/api/public/maintenance';
+  if (Platform.OS === 'web') return 'https://admin.polled.app/api/public/maintenance';
   return '';
 }
 

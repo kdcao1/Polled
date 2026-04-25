@@ -4,6 +4,7 @@
 Polled is a real-time event coordination app built with **Expo**, **React Native**, and **Firebase**. It solves the "endless group chat debate" by allowing users to create events and host polls for things like location, time, and activities.
 
 https://polled.app
+Admin dashboard: https://admin.polled.app
 ---
 
 ## Key Features
