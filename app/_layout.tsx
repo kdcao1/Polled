@@ -5,12 +5,14 @@ import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import { useToast } from '@/components/ui/toast';
 import { useAuth } from '../hooks/useAuth';
 import { ActivityIndicator, Platform, View } from 'react-native';
-import { doc, getDoc } from 'firebase/firestore';
+import { Text } from '@/components/ui/text';
+import { doc, getDoc, getDocFromServer, onSnapshot, type DocumentSnapshot } from 'firebase/firestore';
 import { db } from '../config/firebaseConfig';
 import { useNotifications } from '@/hooks/useNotifications';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { trackScreenView } from '@/utils/analytics';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { maintenanceConfig } from '@/config/env';
 import '../global.css';
 
 function ToastNavigationReset({ routeKey }: { routeKey: string }) {
@@ -27,9 +29,53 @@ function ToastNavigationReset({ routeKey }: { routeKey: string }) {
   return null;
 }
 
+type MaintenanceState = {
+  enabled: boolean;
+  message: string;
+};
+
+const DEFAULT_MAINTENANCE_MESSAGE = 'Polled is temporarily down for maintenance.';
+
+function readMaintenanceState(snapshot: DocumentSnapshot): MaintenanceState {
+  const data = snapshot.data();
+  return {
+    enabled: data?.maintenanceMode === true,
+    message:
+      typeof data?.maintenanceMessage === 'string' && data.maintenanceMessage.trim()
+        ? data.maintenanceMessage
+        : DEFAULT_MAINTENANCE_MESSAGE,
+  };
+}
+
+function maintenanceStatusUrl() {
+  if (maintenanceConfig.statusUrl) return maintenanceConfig.statusUrl;
+  if (__DEV__ && Platform.OS === 'web') return 'http://localhost:3000/api/public/maintenance';
+  return '';
+}
+
+async function fetchMaintenanceStateFromEndpoint(): Promise<MaintenanceState | null> {
+  const url = maintenanceStatusUrl();
+  if (!url) return null;
+
+  const response = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) throw new Error(`Maintenance endpoint returned ${response.status}`);
+
+  const data = await response.json();
+  return {
+    enabled: data?.enabled === true,
+    message:
+      typeof data?.message === 'string' && data.message.trim()
+        ? data.message
+        : DEFAULT_MAINTENANCE_MESSAGE,
+  };
+}
+
 export default function RootLayout() {
   const { user, isLoading: isAuthLoading } = useAuth();
   const [isProfileChecking, setIsProfileChecking] = useState(true);
+  const [maintenance, setMaintenance] = useState<MaintenanceState | null>(null);
   useNotifications(user?.uid);
   
   const pathname = usePathname();
@@ -41,6 +87,51 @@ export default function RootLayout() {
   useEffect(() => {
     trackScreenView(routeKey);
   }, [routeKey]);
+
+  useEffect(() => {
+    let isMounted = true;
+    let hasServerMaintenanceValue = false;
+    const maintenanceRef = doc(db, 'appConfig', 'global');
+
+    const applyEndpointFallback = async () => {
+      try {
+        const endpointState = await fetchMaintenanceStateFromEndpoint();
+        if (isMounted && endpointState) setMaintenance(endpointState);
+        if (isMounted && !endpointState) setMaintenance({ enabled: false, message: '' });
+      } catch (error) {
+        console.warn('Maintenance status endpoint failed:', error);
+        if (isMounted) setMaintenance({ enabled: false, message: '' });
+      }
+    };
+
+    getDocFromServer(maintenanceRef)
+      .then((snapshot) => {
+        hasServerMaintenanceValue = true;
+        if (isMounted) setMaintenance(readMaintenanceState(snapshot));
+      })
+      .catch((error) => {
+        console.warn('Maintenance mode check failed:', error);
+        applyEndpointFallback();
+      });
+
+    const unsubscribe = onSnapshot(
+      maintenanceRef,
+      (snapshot) => {
+        if (snapshot.metadata.fromCache && !hasServerMaintenanceValue) return;
+        if (!snapshot.metadata.fromCache) hasServerMaintenanceValue = true;
+        if (isMounted) setMaintenance(readMaintenanceState(snapshot));
+      },
+      (error) => {
+        console.warn('Maintenance mode listener failed:', error);
+        applyEndpointFallback();
+      }
+    );
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (isAuthLoading) return;
@@ -97,10 +188,21 @@ export default function RootLayout() {
     checkUserProfile();
   }, [user, isAuthLoading, pathname]); 
 
-  if (isAuthLoading || isProfileChecking) {
+  if (isAuthLoading || isProfileChecking || maintenance === null) {
     return (
       <View className="flex-1 justify-center items-center bg-zinc-900">
         <ActivityIndicator size="large" color="#3b82f6" />
+      </View>
+    );
+  }
+
+  if (maintenance.enabled) {
+    return (
+      <View className="flex-1 justify-center items-center bg-zinc-900 px-6">
+        <View className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6">
+          <Text className="text-2xl font-bold text-zinc-50">Maintenance Mode</Text>
+          <Text className="mt-3 text-base text-zinc-300">{maintenance.message}</Text>
+        </View>
       </View>
     );
   }

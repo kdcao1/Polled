@@ -39,6 +39,7 @@ const sanitizeParams = (params: AnalyticsParams = {}) =>
 
 const getAnalyticsInstance = async () => {
   if (Platform.OS !== 'web') return null;
+  if (!analyticsConfig.enableFirebaseMirror) return null;
 
   if (!analyticsPromise) {
     analyticsPromise = import('firebase/analytics')
@@ -49,8 +50,7 @@ const getAnalyticsInstance = async () => {
         const analytics = getAnalytics(app);
         return analytics;
       })
-      .catch((error) => {
-        console.error('Analytics unavailable:', error);
+      .catch(() => {
         return null;
       });
   }

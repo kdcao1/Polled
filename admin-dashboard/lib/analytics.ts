@@ -1,7 +1,109 @@
+import { existsSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 import { getAdminAuth, getAdminDb } from './firebase-admin';
 import type { auth as AdminAuth } from 'firebase-admin';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+type Overview = {
+  activeUsers: number;
+  newUsers: number;
+  sessions: number;
+  screenPageViews: number;
+  eventCount: number;
+};
+
+type DailyUsersPoint = { date: string; users: number };
+type TopEventPoint = { event: string; count: number };
+type TopScreenPoint = { screen: string; views: number; users: number };
+type UserTypePoint = { type: string; users: number };
+type PlatformPoint = { platform: string; users: number };
+type ActivityPoint = { date: string; oneDay: number; sevenDay: number; twentyEightDay: number };
+type DauComparison = { labels: string[]; thisWeek: number[]; lastWeek: number[] };
+type RetentionPoint = { label: string; rate: number };
+type RetentionComparison = { thisWeek: RetentionPoint[]; lastWeek: RetentionPoint[] };
+
+type AnalyticsRow = {
+  uid: string | null;
+  auth_provider: string | null;
+  kind: string;
+  name: string;
+  params_json: string;
+  client_created_at: string | null;
+  ingested_at: string;
+  platform: string | null;
+};
+
+type DatabaseStatement = {
+  all: (...params: unknown[]) => unknown[];
+};
+
+type DatabaseInstance = {
+  prepare: (sql: string) => DatabaseStatement;
+  close: () => void;
+};
+
+type DatabaseSyncConstructor = new (databasePath: string) => DatabaseInstance;
+
+function hasFirebaseAdminKey() {
+  return Boolean(
+    process.env.GOOGLE_SERVICE_ACCOUNT_KEY?.trim() ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim()
+  );
+}
+
+function getSqlitePath() {
+  const configured = process.env.ANALYTICS_SQLITE_PATH?.trim();
+  if (configured) {
+    return isAbsolute(configured) ? configured : resolve(process.cwd(), configured);
+  }
+
+  return resolve(process.cwd(), '..', 'server', 'notification-worker', 'data', 'analytics.sqlite');
+}
+
+function openSqliteDatabase(): DatabaseInstance | null {
+  const databasePath = getSqlitePath();
+  if (!existsSync(databasePath)) return null;
+
+  const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: DatabaseSyncConstructor };
+  return new DatabaseSync(databasePath);
+}
+
+function getLocalRows(): AnalyticsRow[] {
+  const database = openSqliteDatabase();
+  if (!database) return [];
+
+  try {
+    return database.prepare(`
+      SELECT uid, auth_provider, kind, name, params_json, client_created_at, ingested_at, platform
+      FROM analytics_events
+      ORDER BY ingested_at DESC
+    `).all() as AnalyticsRow[];
+  } finally {
+    database.close();
+  }
+}
+
+function parseParams(row: AnalyticsRow): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(row.params_json);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function rowDate(row: AnalyticsRow): Date | null {
+  return toDate(row.client_created_at || row.ingested_at);
+}
+
+function rowEventId(row: AnalyticsRow) {
+  const params = parseParams(row);
+  const eventId = params.event_id;
+  return typeof eventId === 'string' && eventId ? eventId : null;
+}
+
+function uniqueUids(rows: AnalyticsRow[]) {
+  return new Set(rows.map((row) => row.uid).filter((uid): uid is string => Boolean(uid)));
+}
 
 async function getAllUsers(): Promise<AdminAuth.UserRecord[]> {
   const auth = getAdminAuth();
@@ -15,7 +117,7 @@ async function getAllUsers(): Promise<AdminAuth.UserRecord[]> {
   return users;
 }
 
-function toDate(ts: string | undefined): Date | null {
+function toDate(ts: string | undefined | null): Date | null {
   if (!ts) return null;
   const d = new Date(ts);
   return isNaN(d.getTime()) ? null : d;
@@ -36,9 +138,22 @@ function startOfDay(daysAgo: number): Date {
   return d;
 }
 
-// ─── Overview KPIs ────────────────────────────────────────────────────────────
+function dateRangeKeys(days: number) {
+  return Array.from({ length: days }, (_, index) => {
+    const d = startOfDay(days - 1 - index);
+    return toYYYYMMDD(d);
+  });
+}
 
-export async function fetchOverview() {
+function localRowsSince(daysAgo: number) {
+  const cutoff = startOfDay(daysAgo);
+  return getLocalRows().filter((row) => {
+    const date = rowDate(row);
+    return date && date >= cutoff;
+  });
+}
+
+async function fetchFirebaseOverview(): Promise<Overview> {
   const db = getAdminDb();
   const cutoff28 = startOfDay(28);
 
@@ -62,15 +177,37 @@ export async function fetchOverview() {
   return {
     activeUsers,
     newUsers,
-    sessions:        membersSnap.size,   // total event joins
-    screenPageViews: pollsSnap.size,     // total polls created
-    eventCount:      eventsSnap.size,
+    sessions: membersSnap.size,
+    screenPageViews: pollsSnap.size,
+    eventCount: eventsSnap.size,
   };
 }
 
-// ─── Daily Active Users (last 30 days, by lastSignInTime) ─────────────────────
+function fetchLocalOverview(): Overview {
+  const rows = localRowsSince(28);
+  const allRows = getLocalRows();
+  const firstSeenByUid = new Map<string, Date>();
 
-export async function fetchDailyUsers() {
+  for (const row of allRows) {
+    if (!row.uid) continue;
+    const date = rowDate(row);
+    if (!date) continue;
+    const existing = firstSeenByUid.get(row.uid);
+    if (!existing || date < existing) firstSeenByUid.set(row.uid, date);
+  }
+
+  const cutoff28 = startOfDay(28);
+
+  return {
+    activeUsers: uniqueUids(rows).size,
+    newUsers: Array.from(firstSeenByUid.values()).filter((date) => date >= cutoff28).length,
+    sessions: rows.filter((row) => row.name === 'event_joined').length,
+    screenPageViews: rows.filter((row) => row.kind === 'screen_view').length,
+    eventCount: new Set(rows.map(rowEventId).filter(Boolean)).size,
+  };
+}
+
+async function fetchFirebaseDailyUsers(): Promise<DailyUsersPoint[]> {
   const users = await getAllUsers();
   const cutoff = startOfDay(29);
   const counts: Record<string, number> = {};
@@ -88,9 +225,23 @@ export async function fetchDailyUsers() {
     .map(([date, users]) => ({ date, users }));
 }
 
-// ─── Top Events (by poll count) ───────────────────────────────────────────────
+function fetchLocalDailyUsers(): DailyUsersPoint[] {
+  const rows = localRowsSince(29);
+  const usersByDay = new Map<string, Set<string>>();
 
-export async function fetchTopEvents() {
+  for (const row of rows) {
+    if (!row.uid) continue;
+    const date = rowDate(row);
+    if (!date) continue;
+    const key = toYYYYMMDD(date);
+    usersByDay.set(key, usersByDay.get(key) ?? new Set());
+    usersByDay.get(key)!.add(row.uid);
+  }
+
+  return dateRangeKeys(30).map((date) => ({ date, users: usersByDay.get(date)?.size ?? 0 }));
+}
+
+async function fetchFirebaseTopEvents(): Promise<TopEventPoint[]> {
   const db = getAdminDb();
   const [eventsSnap, pollsSnap] = await Promise.all([
     db.collection('events').get(),
@@ -114,9 +265,22 @@ export async function fetchTopEvents() {
     .map(([id, count]) => ({ event: titleMap[id] ?? id, count }));
 }
 
-// ─── Top Events by Members ────────────────────────────────────────────────────
+function fetchLocalTopEvents(): TopEventPoint[] {
+  const counts: Record<string, number> = {};
 
-export async function fetchTopScreens() {
+  for (const row of localRowsSince(28)) {
+    const eventId = rowEventId(row);
+    if (!eventId) continue;
+    counts[eventId] = (counts[eventId] ?? 0) + 1;
+  }
+
+  return Object.entries(counts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 15)
+    .map(([event, count]) => ({ event, count }));
+}
+
+async function fetchFirebaseTopScreens(): Promise<TopScreenPoint[]> {
   const db = getAdminDb();
   const [eventsSnap, membersSnap, pollsSnap] = await Promise.all([
     db.collection('events').get(),
@@ -144,14 +308,31 @@ export async function fetchTopScreens() {
     .slice(0, 10)
     .map(([id, members]) => ({
       screen: titleMap[id] ?? id,
-      views:  members,
-      users:  pollCounts[id] ?? 0,
+      views: members,
+      users: pollCounts[id] ?? 0,
     }));
 }
 
-// ─── New vs Returning Users ───────────────────────────────────────────────────
+function fetchLocalTopScreens(): TopScreenPoint[] {
+  const counts: Record<string, { views: number; users: Set<string> }> = {};
 
-export async function fetchUserType() {
+  for (const row of localRowsSince(28)) {
+    if (row.kind !== 'screen_view') continue;
+    const params = parseParams(row);
+    const rawScreen = params.firebase_screen;
+    const screen = typeof rawScreen === 'string' && rawScreen ? rawScreen.split('?')[0] : row.name;
+    counts[screen] = counts[screen] ?? { views: 0, users: new Set<string>() };
+    counts[screen].views += 1;
+    if (row.uid) counts[screen].users.add(row.uid);
+  }
+
+  return Object.entries(counts)
+    .sort(([, a], [, b]) => b.views - a.views)
+    .slice(0, 10)
+    .map(([screen, stats]) => ({ screen, views: stats.views, users: stats.users.size }));
+}
+
+async function fetchFirebaseUserType(): Promise<UserTypePoint[]> {
   const users = await getAllUsers();
   const cutoff = startOfDay(28);
   let newCount = 0;
@@ -162,22 +343,44 @@ export async function fetchUserType() {
   }
 
   return [
-    { type: 'new',       users: newCount },
+    { type: 'new', users: newCount },
     { type: 'returning', users: users.length - newCount },
   ];
 }
 
-// ─── Sign-in Provider Breakdown ───────────────────────────────────────────────
+function fetchLocalUserType(): UserTypePoint[] {
+  const rows = getLocalRows();
+  const firstSeenByUid = new Map<string, Date>();
+  const seenInLast28 = uniqueUids(localRowsSince(28));
 
-export async function fetchPlatforms() {
+  for (const row of rows) {
+    if (!row.uid) continue;
+    const date = rowDate(row);
+    if (!date) continue;
+    const existing = firstSeenByUid.get(row.uid);
+    if (!existing || date < existing) firstSeenByUid.set(row.uid, date);
+  }
+
+  const cutoff28 = startOfDay(28);
+  const newCount = Array.from(firstSeenByUid.entries()).filter(
+    ([uid, date]) => seenInLast28.has(uid) && date >= cutoff28
+  ).length;
+
+  return [
+    { type: 'new', users: newCount },
+    { type: 'returning', users: Math.max(0, seenInLast28.size - newCount) },
+  ];
+}
+
+async function fetchFirebasePlatforms(): Promise<PlatformPoint[]> {
   const users = await getAllUsers();
   const counts: Record<string, number> = {};
 
   for (const u of users) {
     const provider =
       u.providerData[0]?.providerId === 'google.com' ? 'Google'
-      : u.providerData[0]?.providerId === 'password'  ? 'Email'
-      : u.providerData.length === 0                   ? 'Anonymous'
+      : u.providerData[0]?.providerId === 'password' ? 'Email'
+      : u.providerData.length === 0 ? 'Anonymous'
       : u.providerData[0]?.providerId ?? 'Other';
     counts[provider] = (counts[provider] ?? 0) + 1;
   }
@@ -187,28 +390,38 @@ export async function fetchPlatforms() {
     .map(([platform, users]) => ({ platform, users }));
 }
 
-// ─── User Activity Over Time (1-day / 7-day / 28-day rolling) ────────────────
+function fetchLocalPlatforms(): PlatformPoint[] {
+  const counts: Record<string, Set<string>> = {};
 
-export async function fetchUserActivityOverTime() {
+  for (const row of localRowsSince(28)) {
+    const platform = row.platform || 'unknown';
+    counts[platform] = counts[platform] ?? new Set<string>();
+    if (row.uid) counts[platform].add(row.uid);
+  }
+
+  return Object.entries(counts)
+    .sort(([, a], [, b]) => b.size - a.size)
+    .map(([platform, users]) => ({ platform, users: users.size }));
+}
+
+async function fetchFirebaseUserActivityOverTime(): Promise<ActivityPoint[]> {
   const users = await getAllUsers();
-
-  // Build a set of active dates per user from lastSignInTime
   const userLastSignIn: Date[] = users
     .map((u) => toDate(u.metadata.lastSignInTime))
     .filter(Boolean) as Date[];
 
-  const result: { date: string; oneDay: number; sevenDay: number; twentyEightDay: number }[] = [];
+  const result: ActivityPoint[] = [];
 
   for (let i = 27; i >= 0; i--) {
-    const day     = startOfDay(i);
-    const dayEnd  = new Date(day.getTime() + 86400000 - 1);
-    const day7    = startOfDay(i + 6);
-    const day28   = startOfDay(i + 27);
+    const day = startOfDay(i);
+    const dayEnd = new Date(day.getTime() + 86400000 - 1);
+    const day7 = startOfDay(i + 6);
+    const day28 = startOfDay(i + 27);
 
     result.push({
-      date:           toYYYYMMDD(day),
-      oneDay:         userLastSignIn.filter((d) => d >= day && d <= dayEnd).length,
-      sevenDay:       userLastSignIn.filter((d) => d >= day7 && d <= dayEnd).length,
+      date: toYYYYMMDD(day),
+      oneDay: userLastSignIn.filter((d) => d >= day && d <= dayEnd).length,
+      sevenDay: userLastSignIn.filter((d) => d >= day7 && d <= dayEnd).length,
       twentyEightDay: userLastSignIn.filter((d) => d >= day28 && d <= dayEnd).length,
     });
   }
@@ -216,11 +429,39 @@ export async function fetchUserActivityOverTime() {
   return result;
 }
 
-// ─── DAU: This week vs Last week ─────────────────────────────────────────────
+function fetchLocalUserActivityOverTime(): ActivityPoint[] {
+  const rows = getLocalRows().filter((row) => row.uid && rowDate(row));
+  const byUid = new Map<string, Date[]>();
 
-export async function fetchDAUComparison() {
+  for (const row of rows) {
+    const date = rowDate(row);
+    if (!row.uid || !date) continue;
+    byUid.set(row.uid, byUid.get(row.uid) ?? []);
+    byUid.get(row.uid)!.push(date);
+  }
+
+  const result: ActivityPoint[] = [];
+
+  for (let i = 27; i >= 0; i--) {
+    const day = startOfDay(i);
+    const dayEnd = new Date(day.getTime() + 86400000 - 1);
+    const day7 = startOfDay(i + 6);
+    const day28 = startOfDay(i + 27);
+    const users = Array.from(byUid.values());
+
+    result.push({
+      date: toYYYYMMDD(day),
+      oneDay: users.filter((dates) => dates.some((d) => d >= day && d <= dayEnd)).length,
+      sevenDay: users.filter((dates) => dates.some((d) => d >= day7 && d <= dayEnd)).length,
+      twentyEightDay: users.filter((dates) => dates.some((d) => d >= day28 && d <= dayEnd)).length,
+    });
+  }
+
+  return result;
+}
+
+async function fetchFirebaseDAUComparison(): Promise<DauComparison> {
   const users = await getAllUsers();
-
   const today = startOfDay(0);
   const thisWeek: number[] = Array(7).fill(0);
   const lastWeek: number[] = Array(7).fill(0);
@@ -229,31 +470,61 @@ export async function fetchDAUComparison() {
     const last = toDate(u.metadata.lastSignInTime);
     if (!last) continue;
     const diff = Math.round((today.getTime() - last.getTime()) / 86400000);
-    if (diff >= 0 && diff <= 6)  thisWeek[6 - diff]++;
-    else if (diff <= 13)         lastWeek[13 - diff]++;
+    if (diff >= 0 && diff <= 6) thisWeek[6 - diff]++;
+    else if (diff <= 13) lastWeek[13 - diff]++;
   }
 
-  const labels = Array.from({ length: 7 }, (_, i) => {
+  return { thisWeek, lastWeek, labels: weekLabels(today) };
+}
+
+function fetchLocalDAUComparison(): DauComparison {
+  const rows = getLocalRows().filter((row) => row.uid && rowDate(row));
+  const today = startOfDay(0);
+  const thisWeek: number[] = Array(7).fill(0);
+  const lastWeek: number[] = Array(7).fill(0);
+  const usersByOffset = new Map<number, Set<string>>();
+
+  for (const row of rows) {
+    const date = rowDate(row);
+    if (!date || !row.uid) continue;
+    const diff = Math.floor((today.getTime() - startOfDayFromDate(date).getTime()) / 86400000);
+    if (diff < 0 || diff > 13) continue;
+    usersByOffset.set(diff, usersByOffset.get(diff) ?? new Set());
+    usersByOffset.get(diff)!.add(row.uid);
+  }
+
+  for (let diff = 0; diff <= 13; diff++) {
+    const count = usersByOffset.get(diff)?.size ?? 0;
+    if (diff <= 6) thisWeek[6 - diff] = count;
+    else lastWeek[13 - diff] = count;
+  }
+
+  return { thisWeek, lastWeek, labels: weekLabels(today) };
+}
+
+function weekLabels(today: Date) {
+  return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(today);
     d.setDate(d.getDate() - (6 - i));
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   });
-
-  return { thisWeek, lastWeek, labels };
 }
 
-// ─── Day-1 Retention (new users who signed in again the next day) ─────────────
+function startOfDayFromDate(date: Date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
-export async function fetchDay1Retention() {
+async function fetchFirebaseDay1Retention(): Promise<RetentionComparison> {
   const users = await getAllUsers();
   const today = startOfDay(0);
-
-  const thisWeek: { label: string; rate: number }[] = [];
-  const lastWeek: { label: string; rate: number }[] = [];
+  const thisWeek: RetentionPoint[] = [];
+  const lastWeek: RetentionPoint[] = [];
 
   for (let i = 13; i >= 0; i--) {
-    const day     = startOfDay(i);
-    const dayEnd  = new Date(day.getTime() + 86400000 - 1);
+    const day = startOfDay(i);
+    const dayEnd = new Date(day.getTime() + 86400000 - 1);
     const nextDay = startOfDay(i - 1);
 
     const newOnDay = users.filter((u) => {
@@ -266,19 +537,67 @@ export async function fetchDay1Retention() {
       return last && last >= nextDay;
     });
 
-    const rate = newOnDay.length > 0
-      ? Math.round((retained.length / newOnDay.length) * 100)
-      : 0;
-
+    const rate = newOnDay.length > 0 ? Math.round((retained.length / newOnDay.length) * 100) : 0;
     const label = toYMD(day);
-    const diff  = Math.round((today.getTime() - day.getTime()) / 86400000);
+    const diff = Math.round((today.getTime() - day.getTime()) / 86400000);
 
-    if (diff <= 6)  thisWeek.push({ label, rate });
-    else            lastWeek.push({ label, rate });
+    if (diff <= 6) thisWeek.push({ label, rate });
+    else lastWeek.push({ label, rate });
   }
 
-  return {
-    thisWeek: thisWeek.reverse(),
-    lastWeek: lastWeek.reverse(),
-  };
+  return { thisWeek: thisWeek.reverse(), lastWeek: lastWeek.reverse() };
+}
+
+function fetchLocalDay1Retention(): RetentionComparison {
+  const emptyWeek = Array.from({ length: 7 }, (_, index) => {
+    const day = startOfDay(6 - index);
+    return { label: toYMD(day), rate: 0 };
+  });
+
+  const previousWeek = Array.from({ length: 7 }, (_, index) => {
+    const day = startOfDay(13 - index);
+    return { label: toYMD(day), rate: 0 };
+  });
+
+  return { thisWeek: emptyWeek, lastWeek: previousWeek };
+}
+
+export async function fetchOverview() {
+  return hasFirebaseAdminKey() ? fetchFirebaseOverview() : fetchLocalOverview();
+}
+
+export async function fetchDailyUsers() {
+  return hasFirebaseAdminKey() ? fetchFirebaseDailyUsers() : fetchLocalDailyUsers();
+}
+
+export async function fetchTopEvents() {
+  return hasFirebaseAdminKey() ? fetchFirebaseTopEvents() : fetchLocalTopEvents();
+}
+
+export async function fetchTopScreens() {
+  return hasFirebaseAdminKey() ? fetchFirebaseTopScreens() : fetchLocalTopScreens();
+}
+
+export async function fetchUserType() {
+  return hasFirebaseAdminKey() ? fetchFirebaseUserType() : fetchLocalUserType();
+}
+
+export async function fetchPlatforms() {
+  return hasFirebaseAdminKey() ? fetchFirebasePlatforms() : fetchLocalPlatforms();
+}
+
+export async function fetchUserActivityOverTime() {
+  return hasFirebaseAdminKey() ? fetchFirebaseUserActivityOverTime() : fetchLocalUserActivityOverTime();
+}
+
+export async function fetchDAUComparison() {
+  return hasFirebaseAdminKey() ? fetchFirebaseDAUComparison() : fetchLocalDAUComparison();
+}
+
+export async function fetchDay1Retention() {
+  return hasFirebaseAdminKey() ? fetchFirebaseDay1Retention() : fetchLocalDay1Retention();
+}
+
+export function getAnalyticsSourceLabel() {
+  return hasFirebaseAdminKey() ? 'Firebase Auth + Firestore' : 'Local SQLite analytics';
 }

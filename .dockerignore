@@ -5,9 +5,16 @@ node_modules
 dist
 dist-android-check
 dist-ios-check
+admin-dashboard/.next
+admin-dashboard/node_modules
+admin-dashboard/.env
 server/notification-worker/node_modules
+server/notification-worker/lib
+server/notification-worker/data
+server/notification-worker/.env
 .env
 credentials.json
+*.sqlite
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

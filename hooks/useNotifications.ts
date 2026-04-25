@@ -1,26 +1,27 @@
 import { useEffect } from 'react';
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../config/firebaseConfig';
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    // Keep foreground notifications out of the header area so in-app controls stay tappable.
-    shouldShowBanner: false,
-    shouldShowList: true,
-  }),
-});
 
 export const useNotifications = (userId?: string | null) => {
   useEffect(() => {
     const registerForPushNotifications = async () => {
       if (Platform.OS === 'web') return; // Web doesn't use Expo Push Tokens
+      const Notifications = await import('expo-notifications');
+
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+          // Keep foreground notifications out of the header area so in-app controls stay tappable.
+          shouldShowBanner: false,
+          shouldShowList: true,
+        }),
+      });
+
       if (!Device.isDevice) {
         console.log('Push notifications require a physical device.');
         return;
@@ -79,7 +80,10 @@ export const useNotifications = (userId?: string | null) => {
 
   // Your existing local notification function stays here...
   const scheduleLocalNotification = async (title: string, body: string, secondsFromNow: number = 1) => {
+    if (Platform.OS === 'web') return;
+
     try {
+      const Notifications = await import('expo-notifications');
       await Notifications.scheduleNotificationAsync({
         content: { title, body, sound: true },
         trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: secondsFromNow },

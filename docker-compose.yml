@@ -9,8 +9,53 @@ services:
         EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ${EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID}
         EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: ${EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID}
         EXPO_PUBLIC_ANALYTICS_INGEST_URL: ${EXPO_PUBLIC_ANALYTICS_INGEST_URL}
-    #ports:
-    #  - "8080:80"
+        EXPO_PUBLIC_MAINTENANCE_STATUS_URL: ${EXPO_PUBLIC_MAINTENANCE_STATUS_URL}
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    restart: unless-stopped
+
+  notification-worker:
+    container_name: polled-notification-worker
+    build:
+      context: ./server/notification-worker
+    env_file:
+      - ./server/notification-worker/.env
+    environment:
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-polled-f5b29}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
+      NOTIFICATION_WORKER_POLL_MS: ${NOTIFICATION_WORKER_POLL_MS:-5000}
+      NOTIFICATION_WORKER_BATCH_SIZE: ${NOTIFICATION_WORKER_BATCH_SIZE:-10}
+      ANALYTICS_HTTP_PORT: ${ANALYTICS_HTTP_PORT:-8787}
+      ANALYTICS_SQLITE_PATH: /app/data/analytics.sqlite
+    volumes:
+      - type: bind
+        source: ${GOOGLE_APPLICATION_CREDENTIALS:?Set GOOGLE_APPLICATION_CREDENTIALS to your Firebase service account JSON path}
+        target: /run/secrets/firebase-service-account.json
+        read_only: true
+      - ./server/notification-worker/data:/app/data
+    restart: unless-stopped
+
+  admin-dashboard:
+    container_name: polled-admin-dashboard
+    build:
+      context: ./admin-dashboard
+    env_file:
+      - ./admin-dashboard/.env
+    environment:
+      GOOGLE_SERVICE_ACCOUNT_KEY: ""
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
+      ADMIN_SECRET: ${ADMIN_SECRET:-}
+      ANALYTICS_SQLITE_PATH: /analytics/analytics.sqlite
+    ports:
+      - "${ADMIN_PORT:-3000}:3000"
+    volumes:
+      - type: bind
+        source: ${GOOGLE_APPLICATION_CREDENTIALS:?Set GOOGLE_APPLICATION_CREDENTIALS to your Firebase service account JSON path}
+        target: /run/secrets/firebase-service-account.json
+        read_only: true
+      - ./server/notification-worker/data:/analytics:ro
+    depends_on:
+      - notification-worker
     restart: unless-stopped
     
 networks:

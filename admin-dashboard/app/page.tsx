@@ -8,6 +8,7 @@ import {
   fetchDAUComparison,
   fetchDay1Retention,
   fetchUserActivityOverTime,
+  getAnalyticsSourceLabel,
 } from '@/lib/analytics';
 import MetricCard from '@/components/MetricCard';
 import DailyUsersChart from '@/components/DailyUsersChart';
@@ -17,13 +18,17 @@ import UserActivityChart from '@/components/UserActivityChart';
 import TopEventsTable from '@/components/TopEventsTable';
 import TopScreensTable from '@/components/TopScreensTable';
 import PieBreakdown from '@/components/PieBreakdown';
+import AdminShell from '@/components/AdminShell';
+import { requireAdminSession } from '@/lib/admin-auth';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export default async function AdminPage() {
+  requireAdminSession();
   let overview, dailyUsers, topEvents, topScreens, userType, platforms,
       dauComparison, day1Retention, userActivity;
+  const sourceLabel = getAnalyticsSourceLabel();
 
   try {
     overview      = await fetchOverview();
@@ -43,7 +48,7 @@ export default async function AdminPage() {
           <h1 className="text-lg font-semibold text-red-700 mb-2">Failed to load analytics</h1>
           <p className="text-sm text-red-600 font-mono">{message}</p>
           <p className="text-xs text-red-400 mt-4">
-            Make sure <code>GOOGLE_SERVICE_ACCOUNT_KEY</code> is set correctly in <code>.env.local</code>.<br />
+            Source: <code>{sourceLabel}</code>.<br />
             Failed at: <code className="text-red-500">{(err as any)?.message?.split('\n')[0]}</code>
           </p>
         </div>
@@ -55,15 +60,7 @@ export default async function AdminPage() {
   const platformPie = platforms.map((r) => ({ name: r.platform, value: r.users }));
 
   return (
-    <main className="min-h-screen p-6 md:p-10 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Polled — Admin Dashboard</h1>
-        <p className="text-sm text-gray-400 mt-1">
-          Firebase · Firestore + Auth · {new Date().toLocaleDateString()}
-        </p>
-      </div>
-
+    <AdminShell active="analytics" sourceLabel={sourceLabel}>
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
         <MetricCard label="Active Users (28d)" value={overview.activeUsers} />
@@ -107,6 +104,6 @@ export default async function AdminPage() {
         <PieBreakdown title="New vs Returning Users" data={userTypePie} />
         <PieBreakdown title="Platform Breakdown"     data={platformPie} />
       </div>
-    </main>
+    </AdminShell>
   );
 }

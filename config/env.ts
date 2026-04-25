@@ -14,6 +14,11 @@ export const googleAuthConfig: GoogleAuthConfig = {
 
 export const analyticsConfig = {
   ingestUrl: process.env.EXPO_PUBLIC_ANALYTICS_INGEST_URL?.trim() ?? '',
+  enableFirebaseMirror: process.env.EXPO_PUBLIC_ENABLE_FIREBASE_ANALYTICS === 'true',
+};
+
+export const maintenanceConfig = {
+  statusUrl: process.env.EXPO_PUBLIC_MAINTENANCE_STATUS_URL?.trim() ?? '',
 };
 
 export const hasGoogleAuthConfig = Object.values(googleAuthConfig).every(Boolean);

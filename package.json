@@ -4,6 +4,10 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
+    "dev:all": "node scripts/dev-all.js",
+    "dev:app": "expo start --web",
+    "dev:worker": "npm --prefix server/notification-worker run dev",
+    "dev:admin": "node scripts/clean-admin-next.js && npm --prefix admin-dashboard run dev",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",

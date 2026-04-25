@@ -6,6 +6,7 @@ node_modules/
 # Expo
 .expo/
 dist/
+dist-*-check/
 web-build/
 expo-env.d.ts
 
@@ -35,9 +36,12 @@ yarn-error.*
 .env*.local
 server/notification-worker/lib/
 server/notification-worker/node_modules/
+admin-dashboard/.next/
+admin-dashboard/node_modules/
 
 # typescript
 *.tsbuildinfo
 Polled.code-workspace
 google-services.json
 *.sqlite
+.claude/settings.local.json
