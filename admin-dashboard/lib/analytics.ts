@@ -1,9 +1,10 @@
-import { db, auth } from './firebase-admin';
+import { getAdminAuth, getAdminDb } from './firebase-admin';
 import type { auth as AdminAuth } from 'firebase-admin';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function getAllUsers(): Promise<AdminAuth.UserRecord[]> {
+  const auth = getAdminAuth();
   const users: AdminAuth.UserRecord[] = [];
   let pageToken: string | undefined;
   do {
@@ -38,6 +39,7 @@ function startOfDay(daysAgo: number): Date {
 // ─── Overview KPIs ────────────────────────────────────────────────────────────
 
 export async function fetchOverview() {
+  const db = getAdminDb();
   const cutoff28 = startOfDay(28);
 
   const [users, eventsSnap, membersSnap, pollsSnap] = await Promise.all([
@@ -89,6 +91,7 @@ export async function fetchDailyUsers() {
 // ─── Top Events (by poll count) ───────────────────────────────────────────────
 
 export async function fetchTopEvents() {
+  const db = getAdminDb();
   const [eventsSnap, pollsSnap] = await Promise.all([
     db.collection('events').get(),
     db.collectionGroup('polls').get(),
@@ -114,6 +117,7 @@ export async function fetchTopEvents() {
 // ─── Top Events by Members ────────────────────────────────────────────────────
 
 export async function fetchTopScreens() {
+  const db = getAdminDb();
   const [eventsSnap, membersSnap, pollsSnap] = await Promise.all([
     db.collection('events').get(),
     db.collectionGroup('members').get(),
