@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
@@ -222,7 +222,23 @@ function queuedJobsCollection(firestore: Firestore) {
 }
 
 function initializeAnalyticsDatabase(databasePath: string) {
-  mkdirSync(dirname(databasePath), { recursive: true });
+  const databaseDir = dirname(databasePath);
+  mkdirSync(databaseDir, { recursive: true });
+
+  try {
+    accessSync(databaseDir, constants.W_OK);
+  } catch {
+    chmodSync(databaseDir, 0o775);
+  }
+
+  if (existsSync(databasePath)) {
+    try {
+      accessSync(databasePath, constants.W_OK);
+    } catch {
+      chmodSync(databasePath, 0o664);
+    }
+  }
+
   const database = new DatabaseSync(databasePath);
 
   database.exec(`
@@ -244,6 +260,16 @@ function initializeAnalyticsDatabase(databasePath: string) {
     CREATE INDEX IF NOT EXISTS idx_analytics_events_name
       ON analytics_events (name);
   `);
+
+  try {
+    database.exec('PRAGMA user_version = user_version;');
+  } catch (error) {
+    throw new Error(
+      `Analytics SQLite database is not writable at ${databasePath}. Check the host mount permissions for ${databaseDir}. ${
+        error instanceof Error ? error.message : 'Unknown SQLite write error.'
+      }`
+    );
+  }
 
   return database;
 }

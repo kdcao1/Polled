@@ -12,6 +12,13 @@
       "distribution": "internal"
     },
     "production": {
+      "env": {
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "1059076773398-0oicat1eqqohtsrhrajpbsm67spk2u9s.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "1059076773398-9udl5scb2j88g67jaho8i3fab4cvdse2.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "1059076773398-8lm8hoopufs98abcq02mcl96g4cds45r.apps.googleusercontent.com",
+        "EXPO_PUBLIC_ANALYTICS_INGEST_URL": "https://analytics.polled.app/analytics",
+        "EXPO_PUBLIC_MAINTENANCE_STATUS_URL": "https://admin.polled.app/api/public/maintenance"
+      },
       "autoIncrement": true
     }
   },

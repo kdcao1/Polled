@@ -17,8 +17,12 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.kdcao.polled",
       "associatedDomains": [
+        "applinks:polled.app",
         "applinks:polled.app"
-      ]
+      ],
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
