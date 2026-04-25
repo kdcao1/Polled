@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server';
 import { clearAdminSession } from '@/lib/admin-auth';
+import { adminRedirect } from '@/lib/admin-redirect';
 
 export async function POST(request: Request) {
   clearAdminSession();
-  return NextResponse.redirect(new URL('/login', request.url), 303);
+  return adminRedirect(request, '/login');
 }

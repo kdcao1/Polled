@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
@@ -144,7 +144,30 @@ function buildFirebaseAdminOptions(): AppOptions {
   }
 
   if (GOOGLE_APPLICATION_CREDENTIALS_PATH) {
-    options.credential = applicationDefault();
+    const stats = statSync(GOOGLE_APPLICATION_CREDENTIALS_PATH);
+    if (stats.isDirectory()) {
+      throw new Error(
+        `GOOGLE_APPLICATION_CREDENTIALS points to a directory. Set it to the Firebase service account JSON file path, for example /home/kdcao/Documents/credentials.json. Current value: ${GOOGLE_APPLICATION_CREDENTIALS_PATH}`
+      );
+    }
+
+    try {
+      const serviceAccount = JSON.parse(
+        readFileSync(GOOGLE_APPLICATION_CREDENTIALS_PATH, 'utf8')
+      ) as ServiceAccount & {
+        project_id?: string;
+      };
+
+      options.credential = cert(serviceAccount);
+      options.projectId ||= serviceAccount.project_id;
+    } catch (error) {
+      throw new Error(
+        `Invalid GOOGLE_APPLICATION_CREDENTIALS file at ${GOOGLE_APPLICATION_CREDENTIALS_PATH}. ${
+          error instanceof Error ? error.message : 'Could not parse service account JSON.'
+        }`
+      );
+    }
+
     return options;
   }
 
