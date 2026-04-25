@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { TouchableOpacity, Platform, Share } from 'react-native';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -7,9 +7,10 @@ import { Text } from '@/components/ui/text';
 import { Box } from '@/components/ui/box';
 import { Button, ButtonText } from '@/components/ui/button';
 import * as Clipboard from 'expo-clipboard';
-import { Eye } from 'lucide-react-native';
+import { CalendarPlus, Eye } from 'lucide-react-native';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import { getEventStatusLabel, isEventEnded } from '@/utils/eventStatus';
+import CalendarModal from '@/components/custom/CalendarModal';
 
 interface EventHeaderProps {
   eventData: any;
@@ -33,6 +34,7 @@ interface EventHeaderProps {
 export default function EventHeader({ eventData, headcount, isMobile, isOrganizer, joinLink, timeAvailabilityPoll, timeQuickPoll, locationQuickPoll, isQuickPollExpired, getQuickPollWinner, onBack, onShowQR, onOpenLinkedPoll, onResolveTimeTie, onShowParticipants, onEditEvent }: EventHeaderProps) {
   const toast = useToast();
   const eventEnded = isEventEnded(eventData);
+  const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
 
   const renderQuickPollValue = (field: 'time' | 'location', quickPoll?: any) => {
     const currentValue = eventData?.[field];
@@ -147,6 +149,7 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
   };
 
   return (
+    <>
     <VStack className="gap-2 mb-6">
       <Button variant="link" onPress={onBack} className="self-start p-0 mb-1">
         <ButtonText className="text-blue-500">← Back</ButtonText>
@@ -167,13 +170,18 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
             </Box>
           </HStack>
 
-          <HStack className="items-center gap-4 mt-3">
+          <HStack className="items-center gap-4 mt-3 flex-wrap">
              <TouchableOpacity onPress={handleCopyLink} className="flex-row items-center gap-1.5 active:opacity-70">
                <Text className="text-blue-400 font-semibold text-sm">Copy Share Link</Text>
              </TouchableOpacity>
              
              <TouchableOpacity onPress={onShowQR} className="flex-row items-center gap-1.5 active:opacity-70">
                <Text className="text-blue-400 font-semibold text-sm">Show QR Code</Text>
+             </TouchableOpacity>
+
+             <TouchableOpacity onPress={() => setIsCalendarModalOpen(true)} className="flex-row items-center gap-1.5 active:opacity-70">
+               <CalendarPlus size={15} color="#60a5fa" />
+               <Text className="text-blue-400 font-semibold text-sm">Add Calendar</Text>
              </TouchableOpacity>
 
              {Platform.OS !== 'web' && isMobile && (
@@ -227,5 +235,12 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
         </VStack>
       </HStack>
     </VStack>
+    <CalendarModal
+      visible={isCalendarModalOpen}
+      eventData={eventData}
+      joinLink={joinLink}
+      onClose={() => setIsCalendarModalOpen(false)}
+    />
+    </>
   );
 }

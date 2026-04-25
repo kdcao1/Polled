@@ -22,6 +22,7 @@ import { db, auth } from '../../config/firebaseConfig';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import { trackEvent } from '@/utils/analytics';
 import { parseScheduledEventDate } from '@/utils/eventStatus';
+import { ensureJoinCodeForEvent } from '@/utils/joinCodes';
 
 const SUCCESS_TOAST_VISIBILITY_MS = 900;
 
@@ -34,9 +35,11 @@ export default function EditEventScreen() {
   const initialTitle = typeof params.title === 'string' ? params.title : '';
   const initialTime = typeof params.time === 'string' ? params.time : '';
   const initialLocation = typeof params.location === 'string' ? params.location : '';
+  const initialJoinCode = typeof params.joinCode === 'string' ? params.joinCode : '';
   const initialIdentityRequirement =
     params.identityRequirement === 'linked_account' ? 'linked_account' : 'none';
   const initialEventStatus = params.status === 'ended' ? 'ended' : 'voting';
+  const eventPath = id ? `/event/${id as string}` : '/dashboard';
   const hasPrefilledValues =
     typeof params.title === 'string' ||
     typeof params.time === 'string' ||
@@ -47,12 +50,26 @@ export default function EditEventScreen() {
   const [title, setTitle] = useState(initialTitle);
   const [time, setTime] = useState(initialTime);
   const [location, setLocation] = useState(initialLocation);
+  const [joinCode, setJoinCode] = useState(initialJoinCode);
   const [identityRequirement, setIdentityRequirement] = useState<'none' | 'linked_account'>(initialIdentityRequirement);
   const [eventStatus, setEventStatus] = useState<'voting' | 'ended'>(initialEventStatus);
   
   const [isLoading, setIsLoading] = useState(!hasPrefilledValues);
   const [isSaving, setIsSaving] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
+
+  const closeEditor = () => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace(eventPath as any);
+  };
+
+  const returnToEvent = () => {
+    router.replace(eventPath as any);
+  };
 
   // --- REUSABLE TOAST HELPER ---
   const showToast = (toastTitle: string, description: string, type: 'success' | 'error') => {
@@ -98,20 +115,21 @@ export default function EditEventScreen() {
           // Security Check: Boot them out if they aren't the organizer
           if (data.organizerId !== currentUid) {
             showToast('Access Denied', 'Only the organizer can edit this event.', 'error');
-            router.back();
+            closeEditor();
             return;
           }
 
           setTitle((current) => current || data.title || '');
           setTime((current) => current || data.time || '');
           setLocation((current) => current || data.location || '');
+          setJoinCode((current) => current || data.joinCode || '');
           setIdentityRequirement((current) =>
             current === 'linked_account' || data.identityRequirement !== 'linked_account' ? current : 'linked_account'
           );
           setEventStatus((current) => (current === 'ended' || data.status !== 'ended' ? current : 'ended'));
         } else {
           showToast('Not Found', 'This event no longer exists.', 'error');
-          router.back();
+          closeEditor();
         }
       } catch (error) {
         console.error("Error fetching event:", error);
@@ -160,6 +178,8 @@ export default function EditEventScreen() {
       }
 
       await updateDoc(docRef, updatePayload);
+      const syncedJoinCode = await ensureJoinCodeForEvent(id as string, { joinCode, identityRequirement });
+      setJoinCode(syncedJoinCode);
 
       trackEvent('event_updated', {
         event_id: id as string,
@@ -171,7 +191,7 @@ export default function EditEventScreen() {
 
       showToast('Success', forceEnd ? 'Event ended successfully.' : 'Event updated successfully.', 'success');
       await waitForSuccessToast();
-      router.back();
+      returnToEvent();
     } catch (error) {
       console.error(forceEnd ? "Error ending event:" : "Error updating event:", error);
       showToast('Error', forceEnd ? 'Could not end event. Try again.' : 'Could not save changes. Try again.', 'error');
@@ -199,7 +219,7 @@ export default function EditEventScreen() {
       showToast('Success', 'Event ended successfully.', 'success');
       trackEvent('event_ended_manual', { event_id: id as string, source: 'edit_screen' });
       await waitForSuccessToast();
-      router.back();
+      returnToEvent();
     } finally {
       setIsEnding(false);
     }
@@ -240,7 +260,7 @@ export default function EditEventScreen() {
         <Button 
           variant="link" 
           className="p-0"
-          onPress={() => router.back()}
+          onPress={closeEditor}
           isDisabled={isSaving || isEnding}
         >
           <ButtonText className="text-zinc-400">Cancel</ButtonText>
@@ -363,7 +383,7 @@ export default function EditEventScreen() {
   if (Platform.OS === 'web') {
     return (
       <Box className="flex-1 justify-center items-center px-4 py-6">
-        <Pressable className="absolute inset-0 bg-black/70" onPress={() => router.back()} />
+        <Pressable className="absolute inset-0 bg-black/70" onPress={closeEditor} />
         <Box className="w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-900 px-6 py-6 z-10 shadow-2xl">
           <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             {formContent}

@@ -33,14 +33,3 @@ https://polled.app
   * control users
   * maintenance mode
   * flush stale events defined by no activity in n days
-* replace `YOUR_APPLE_TEAM_ID` in `public/.well-known/apple-app-site-association`
-
-## Environment
-
-Create a `.env` file in the project root and add:
-
-```bash
-EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=
-EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=
-EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=
-```

@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import { createModal } from '@gluestack-ui/core/modal/creator';
-import { Pressable, View, ScrollView, ViewStyle } from 'react-native';
+import { Pressable, View, ScrollView, ViewStyle, Platform } from 'react-native';
 import {
   Motion,
   AnimatePresence,
@@ -111,11 +111,12 @@ type IModalCloseButtonProps = React.ComponentProps<typeof UIModal.CloseButton> &
   VariantProps<typeof modalCloseButtonStyle> & { className?: string };
 
 const Modal = React.forwardRef<React.ComponentRef<typeof UIModal>, IModalProps>(
-  ({ className, size = 'md', ...props }, ref) => (
+  ({ className, size = 'md', style, ...props }, ref) => (
     <UIModal
       ref={ref}
       {...props}
-      pointerEvents="box-none"
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'box-none' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'box-none' as const } : null]}
       className={modalStyle({ size, class: className })}
       context={{ size }}
     />
@@ -158,7 +159,7 @@ const ModalBackdrop = React.forwardRef<
 const ModalContent = React.forwardRef<
   React.ComponentRef<typeof UIModal.Content>,
   IModalContentProps
->(function ModalContent({ className, size, ...props }, ref) {
+>(function ModalContent({ className, size, style, ...props }, ref) {
   const { size: parentSize } = useStyleContext(SCOPE);
 
   return (
@@ -192,7 +193,8 @@ const ModalContent = React.forwardRef<
         size,
         class: className,
       })}
-      pointerEvents="auto"
+      {...(Platform.OS !== 'web' ? { pointerEvents: 'auto' as const } : {})}
+      style={[style, Platform.OS === 'web' ? { pointerEvents: 'auto' as const } : null]}
     />
   );
 });

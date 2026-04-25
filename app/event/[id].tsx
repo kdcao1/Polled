@@ -5,6 +5,7 @@ import { HStack } from '@/components/ui/hstack';
 import { Heading } from '@/components/ui/heading';
 import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useToast, Toast, ToastTitle, ToastDescription } from '@/components/ui/toast';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -13,17 +14,19 @@ import PollModal from '@/components/custom/PollModal';
 import PollCard from '@/components/custom/PollCard';
 import EventHeader from '@/components/custom/EventHeader';
 import QRModal from '@/components/custom/QRModal';
+import CalendarModal from '@/components/custom/CalendarModal';
 import EmptyState from '@/components/custom/EmptyState';
 import PollActionModal from '@/components/custom/PollActionModal';
 import ParticipantsModal from '@/components/custom/ParticipantsModal';
 import { buildJoinLink } from '@/utils/inviteLinks';
+import { ensureJoinCodeForEvent } from '@/utils/joinCodes';
 import { completeAnalyticsJourney, ensureAnalyticsJourneyStarted, incrementAnalyticsCounter, trackEvent, trackEventOnce } from '@/utils/analytics';
 import { getEventItemType, getRespondedUserIds, getResponseCount, isEventItemExpired } from '@/utils/eventItems';
 import { getEventStatusLabel, isEventEnded, shouldAutoEndEvent } from '@/utils/eventStatus';
 import { enqueueNotificationJob } from '@/utils/notificationJobs';
-import { doc, onSnapshot, collection, query, orderBy, addDoc, deleteDoc, runTransaction, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share, Modal, Pressable, Platform, PanResponder, Animated, Easing } from 'react-native';
-import { QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
+import { doc, onSnapshot, collection, query, orderBy, addDoc, deleteDoc, runTransaction, updateDoc, getDoc, getDocFromServer, serverTimestamp } from 'firebase/firestore';
+import { View, ScrollView, TouchableOpacity, useWindowDimensions, Share, Modal, Pressable, Platform, PanResponder, Animated, Easing, Text as RNText } from 'react-native';
+import { CalendarPlus, MoreVertical, QrCode, Share as ShareIcon, Eye } from 'lucide-react-native';
 
 type LinkedField = 'time' | 'location';
 type AvailabilityPollMode = 'date' | 'time';
@@ -388,10 +391,195 @@ function TimePollModeModal({
             >
               <Text className="text-zinc-100 font-bold text-lg">Set an exact date and time manually</Text>
               <Text className="text-zinc-400 text-sm mt-1">
-                Skip polling and jump straight to editing the event details yourself.
+                Pick one date and one time slot, then set the event time directly.
               </Text>
             </TouchableOpacity>
           </VStack>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+interface ExactTimeModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onSave: (dateKey: string, hour: number) => Promise<void>;
+}
+
+function ExactTimeModal({ visible, onClose, onSave }: ExactTimeModalProps) {
+  const [step, setStep] = useState<'date' | 'time'>('date');
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date());
+  const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
+  const [selectedHour, setSelectedHour] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const monthCells = useMemo(() => getMonthGrid(calendarMonth), [calendarMonth]);
+  const todayKey = toDateKey(new Date());
+  const hours = Array.from(
+    { length: Math.max(DEFAULT_AVAILABILITY_END_HOUR - DEFAULT_AVAILABILITY_START_HOUR, 0) },
+    (_, idx) => DEFAULT_AVAILABILITY_START_HOUR + idx
+  );
+
+  useEffect(() => {
+    if (!visible) return;
+    setStep('date');
+    setCalendarMonth(new Date());
+    setSelectedDateKey(null);
+    setSelectedHour(null);
+    setSaving(false);
+  }, [visible]);
+
+  const handleSave = async () => {
+    if (!selectedDateKey || selectedHour == null) return;
+
+    try {
+      setSaving(true);
+      await onSave(selectedDateKey, selectedHour);
+      onClose();
+    } catch (error) {
+      console.error('Error setting exact event time:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <View className="flex-1 justify-center items-center p-4">
+        <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
+        <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-xl max-h-[90%] shadow-2xl z-10">
+          <HStack className="justify-between items-center mb-4 gap-4">
+            <VStack className="flex-1">
+              <Heading size="xl" className="text-zinc-50">
+                {step === 'date' ? 'Pick one date' : 'Pick one time'}
+              </Heading>
+              <Text className="text-zinc-400 mt-1">
+                {step === 'date'
+                  ? 'Choose the exact event date.'
+                  : selectedDateKey
+                    ? `${formatFullDateLabel(selectedDateKey)}`
+                    : 'Choose the exact event time.'}
+              </Text>
+            </VStack>
+            <Button size="sm" variant="link" onPress={onClose}>
+              <ButtonText className="text-zinc-400">Cancel</ButtonText>
+            </Button>
+          </HStack>
+
+          {step === 'date' ? (
+            <>
+              <HStack className="items-center justify-between mb-4 bg-zinc-800 border border-zinc-700 rounded-2xl px-4 py-3">
+                <TouchableOpacity onPress={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}>
+                  <Text className="text-emerald-400 font-semibold">Prev</Text>
+                </TouchableOpacity>
+                <Text className="text-zinc-50 font-bold text-lg">
+                  {MONTH_NAMES[calendarMonth.getMonth()]} {calendarMonth.getFullYear()}
+                </Text>
+                <TouchableOpacity onPress={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}>
+                  <Text className="text-emerald-400 font-semibold">Next</Text>
+                </TouchableOpacity>
+              </HStack>
+
+              <VStack className="gap-2">
+                <HStack className="gap-2">
+                  {WEEKDAY_LABELS.map((label) => (
+                    <View key={label} className="flex-1 items-center py-2">
+                      <Text className="text-zinc-500 text-xs font-bold uppercase">{label}</Text>
+                    </View>
+                  ))}
+                </HStack>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                  {monthCells.map((cell) => {
+                    const cellStyle = { width: '14.2857%' as const, aspectRatio: 1, padding: 4 };
+                    if (!cell.date) return <View key={cell.key} style={cellStyle} />;
+
+                    const dateKey = toDateKey(cell.date);
+                    const disabled = dateKey < todayKey;
+                    const selected = selectedDateKey === dateKey;
+
+                    return (
+                      <View key={cell.key} style={cellStyle}>
+                        <TouchableOpacity
+                          disabled={disabled}
+                          activeOpacity={0.8}
+                          onPress={() => {
+                            setSelectedDateKey(dateKey);
+                            setSelectedHour(null);
+                          }}
+                          className={`flex-1 rounded-2xl border items-center justify-center ${selected ? 'bg-emerald-600 border-emerald-500' : 'bg-zinc-800 border-zinc-700'} ${disabled ? 'opacity-30' : ''}`}
+                        >
+                          <Text className={`font-semibold ${selected ? 'text-white' : 'text-zinc-200'}`}>
+                            {cell.date.getDate()}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              </VStack>
+
+              <Button
+                size="xl"
+                action="primary"
+                className="bg-emerald-600 border-0 mt-6"
+                onPress={() => setStep('time')}
+                isDisabled={!selectedDateKey}
+              >
+                <ButtonText className="font-bold text-white">Continue</ButtonText>
+              </Button>
+            </>
+          ) : (
+            <>
+              <ScrollView className="w-full" style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                <View className="flex-row flex-wrap">
+                  {hours.map((hour) => {
+                    const selected = selectedHour === hour;
+                    const slotDate = selectedDateKey ? fromDateKey(selectedDateKey) : null;
+                    slotDate?.setHours(hour, 0, 0, 0);
+                    const disabled = !!slotDate && slotDate.getTime() <= Date.now();
+
+                    return (
+                      <View key={hour} className="w-1/2 p-2">
+                        <TouchableOpacity
+                          disabled={disabled}
+                          activeOpacity={0.8}
+                          onPress={() => setSelectedHour(hour)}
+                          className={`h-12 rounded-2xl border items-center justify-center ${selected ? 'bg-emerald-600 border-emerald-500' : 'bg-zinc-800 border-zinc-700'} ${disabled ? 'opacity-30' : ''}`}
+                        >
+                          <Text className={`font-semibold ${selected ? 'text-white' : 'text-zinc-200'}`}>
+                            {formatHourLabel(hour)}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+
+              <HStack className="gap-3 mt-6">
+                <Button
+                  size="xl"
+                  variant="outline"
+                  className="flex-1 border-zinc-700 bg-zinc-800"
+                  onPress={() => setStep('date')}
+                  isDisabled={saving}
+                >
+                  <ButtonText className="font-bold text-zinc-200">Back</ButtonText>
+                </Button>
+                <Button
+                  size="xl"
+                  action="primary"
+                  className="flex-1 bg-emerald-600 border-0"
+                  onPress={handleSave}
+                  isDisabled={selectedHour == null || saving}
+                >
+                  <ButtonText className="font-bold text-white">
+                    {saving ? 'Saving...' : 'Set Time'}
+                  </ButtonText>
+                </Button>
+              </HStack>
+            </>
+          )}
         </View>
       </View>
     </Modal>
@@ -456,7 +644,7 @@ function DateAvailabilityPickerModal({
       <View className="flex-1 justify-center items-center p-4">
         <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} />
         <View className="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 w-full max-w-xl max-h-[90%] shadow-2xl z-10">
-          <HStack className="justify-between items-start mb-4 gap-4">
+          <HStack className="justify-between items-start mb-5 gap-4">
             <VStack className="flex-1 gap-1">
               <Heading size="xl" className="text-zinc-50">Pick the dates you can do</Heading>
               <Text className="text-zinc-400">
@@ -561,7 +749,7 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   const MOBILE_SLOT_HEIGHT = 46;
   const MOBILE_SLOT_GAP = 8;
   const MOBILE_SLOT_WIDTH = '86%';
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const isMobilePicker = width < 768;
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -576,6 +764,22 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
   const { startHour, endHour } = getAvailabilityHourBounds(poll);
   const currentDateKey = dateKeys[currentDateIndex];
   const hours = Array.from({ length: Math.max(endHour - startHour, 0) }, (_, idx) => startHour + idx);
+  const useSingleColumnPicker = isMobilePicker || dateKeys.length <= 1;
+  const desktopTimeColumnWidth = 84;
+  const desktopDateColumnWidth = 140;
+  const desktopColumnGap = 8;
+  const desktopHeaderHeight = 52;
+  const desktopSlotHeight = 38;
+  const desktopGridWidth =
+    desktopTimeColumnWidth +
+    Math.max(dateKeys.length, 1) * desktopDateColumnWidth +
+    Math.max(dateKeys.length, 1) * desktopColumnGap;
+  const desktopModalWidth = Math.min(
+    Math.max(desktopGridWidth + 72, 460),
+    Math.max(width - 32, 320),
+    1180
+  );
+  const desktopGridMaxHeight = Math.min(Math.max(height - 310, 280), 620);
 
   useEffect(() => {
     if (!visible || !poll) return;
@@ -683,11 +887,17 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
     <Modal visible={visible} animationType="fade" transparent>
       <View className="flex-1 justify-center items-center p-4">
         <Pressable className="absolute top-0 bottom-0 left-0 right-0 bg-black/80" onPress={onClose} onPressOut={() => setIsDragging(false)} />
-        <View className={`bg-zinc-900 rounded-3xl border border-zinc-800 w-full shadow-2xl z-10 ${isMobilePicker ? 'max-w-md max-h-[88%] px-4 py-5' : 'max-w-5xl max-h-[92%] p-6'}`}>
-          <HStack className="justify-between items-start mb-4 gap-4">
+        <View
+          className={`bg-zinc-900 rounded-3xl border border-zinc-800 shadow-2xl z-10 ${useSingleColumnPicker ? 'w-full max-w-md max-h-[88%] px-4 py-5' : 'max-h-[92%] p-6'}`}
+          style={useSingleColumnPicker ? undefined : { width: desktopModalWidth }}
+        >
+          <HStack
+            className="justify-between items-start gap-4"
+            style={{ marginBottom: useSingleColumnPicker ? 16 : 20, zIndex: 2, backgroundColor: '#18181b' }}
+          >
             <VStack className="flex-1">
               <Heading size="xl" className="text-zinc-50">Mark your availability</Heading>
-              {!isMobilePicker && (
+              {!useSingleColumnPicker && (
                 <Text className="text-zinc-400 mt-1">
                   Drag across hours to mark when you&apos;re free. On touch devices, tap individual blocks.
                 </Text>
@@ -698,7 +908,7 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
             </Button>
           </HStack>
 
-          {isMobilePicker ? (
+          {useSingleColumnPicker ? (
             <VStack className="gap-4">
               {currentDateKey ? (
                 <VStack className="items-center gap-1">
@@ -755,56 +965,86 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
               </ScrollView>
             </VStack>
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <VStack className="gap-2 pb-2" onTouchEnd={handleDragEnd}>
-                <HStack className="gap-2">
-                  <View style={{ width: 84 }} />
+            <View style={{ zIndex: 1, alignItems: 'center' }}>
+              <View style={{ width: desktopGridWidth }}>
+                <View style={{ flexDirection: 'row', gap: desktopColumnGap, height: desktopHeaderHeight, marginBottom: 8, overflow: 'hidden' }}>
+                  <View style={{ width: desktopTimeColumnWidth, height: desktopHeaderHeight }} />
                   {dateKeys.map((dateKey) => (
-                    <View key={dateKey} className="bg-zinc-800 border border-zinc-700 rounded-xl py-3 items-center" style={{ width: 140 }}>
-                      <Text className="text-zinc-100 font-semibold">{formatDateLabel(dateKey)}</Text>
-                      <Text className="text-zinc-500 text-xs mt-1">
+                    <View
+                      key={dateKey}
+                      style={{
+                        width: desktopDateColumnWidth,
+                        height: desktopHeaderHeight,
+                        borderRadius: 12,
+                        borderWidth: 1,
+                        borderColor: '#3f3f46',
+                        backgroundColor: '#27272a',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        overflow: 'hidden',
+                        paddingHorizontal: 8,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <RNText
+                        style={{ color: '#f4f4f5', fontSize: 13, fontWeight: '600', lineHeight: 17, height: 18, textAlign: 'center', width: '100%', overflow: 'hidden' }}
+                      >
+                        {formatDateLabel(dateKey)}
+                      </RNText>
+                      <RNText
+                        style={{ color: '#71717a', fontSize: 11, lineHeight: 14, height: 15, marginTop: 1, textAlign: 'center', width: '100%', overflow: 'hidden' }}
+                      >
                         {fromDateKey(dateKey).toLocaleDateString(undefined, { weekday: 'short' })}
-                      </Text>
+                      </RNText>
                     </View>
                   ))}
-                </HStack>
+                </View>
 
-                {hours.map((hour) => (
-                  <HStack key={hour} className="gap-2 items-center">
-                    <View style={{ width: 84 }} className="pr-2 items-end">
-                      <Text className="text-zinc-400 text-xs font-semibold">{formatHourLabel(hour)}</Text>
-                    </View>
-                    {dateKeys.map((dateKey) => {
-                      const slotKey = `${dateKey}|${hour}`;
-                      const selected = selectedSlots.includes(slotKey);
-                      const webHandlers = Platform.OS === 'web'
-                        ? {
-                            onMouseDown: () => handleSlotStart(slotKey),
-                            onMouseEnter: () => handleSlotEnter(slotKey),
-                            onMouseUp: handleDragEnd,
-                          }
-                        : {};
+                <ScrollView
+                  showsVerticalScrollIndicator={false}
+                  style={{ maxHeight: Math.max(desktopGridMaxHeight - desktopHeaderHeight - 8, 220) }}
+                  contentContainerStyle={{ paddingBottom: 4 }}
+                  scrollEnabled={!isDragging}
+                >
+                  <VStack className="gap-2 pb-2" onTouchEnd={handleDragEnd}>
+                    {hours.map((hour) => (
+                      <HStack key={hour} className="gap-2 items-center">
+                        <View style={{ width: desktopTimeColumnWidth }} className="pr-2 items-end">
+                          <Text className="text-zinc-400 text-xs font-semibold">{formatHourLabel(hour)}</Text>
+                        </View>
+                        {dateKeys.map((dateKey) => {
+                          const slotKey = `${dateKey}|${hour}`;
+                          const selected = selectedSlots.includes(slotKey);
+                          const webHandlers = Platform.OS === 'web'
+                            ? {
+                                onMouseDown: () => handleSlotStart(slotKey),
+                                onMouseEnter: () => handleSlotEnter(slotKey),
+                                onMouseUp: handleDragEnd,
+                              }
+                            : {};
 
-                      return (
-                        <Pressable
-                          key={slotKey}
-                          {...(webHandlers as any)}
-                          onPressIn={() => Platform.OS !== 'web' && handleSlotStart(slotKey)}
-                          onPressOut={() => Platform.OS !== 'web' && handleDragEnd()}
-                          className={`rounded-xl border ${selected ? 'bg-emerald-600 border-emerald-500' : 'bg-zinc-800 border-zinc-700'}`}
-                          style={{ width: 140, height: 42 }}
-                        >
-                          <View className="flex-1 items-center justify-center" />
-                        </Pressable>
-                      );
-                    })}
-                  </HStack>
-                ))}
-              </VStack>
-            </ScrollView>
+                          return (
+                            <Pressable
+                              key={slotKey}
+                              {...(webHandlers as any)}
+                            onPressIn={() => Platform.OS !== 'web' && handleSlotStart(slotKey)}
+                            onPressOut={() => Platform.OS !== 'web' && handleDragEnd()}
+                            className={`rounded-xl border ${selected ? 'bg-emerald-600 border-emerald-500' : 'bg-zinc-800 border-zinc-700'}`}
+                            style={{ width: desktopDateColumnWidth, height: desktopSlotHeight }}
+                          >
+                              <View className="flex-1 items-center justify-center" />
+                            </Pressable>
+                          );
+                        })}
+                      </HStack>
+                    ))}
+                  </VStack>
+                </ScrollView>
+              </View>
+            </View>
           )}
 
-          {isMobilePicker ? (
+          {useSingleColumnPicker ? (
             <VStack className="pt-3 gap-2">
               <Text className="text-center text-zinc-500 text-xs">
                 Hold and drag to select multiple
@@ -839,8 +1079,8 @@ function AvailabilityPickerModal({ visible, poll, currentUid, onClose, onSave }:
               </HStack>
             </VStack>
           ) : (
-            <HStack className="items-center justify-center mt-4">
-              <Button size="lg" action="primary" className="bg-emerald-600 border-0 self-center" onPress={handleSave} isDisabled={saving}>
+            <HStack className="items-center justify-center self-center mt-4" style={{ width: desktopGridWidth }}>
+              <Button size="lg" action="primary" className="bg-emerald-600 border-0" onPress={handleSave} isDisabled={saving}>
                 <ButtonText className="font-bold text-white">Save Availability</ButtonText>
               </Button>
             </HStack>
@@ -930,8 +1170,55 @@ interface AvailabilityPollCardProps {
   eventEnded: boolean;
   isOrganizer: boolean;
   onDelete: (poll: any) => void;
+  onActionPress?: (poll: any) => void;
   onOpenAvailability: (poll: any) => void;
   onResolveTie?: (poll: any) => void;
+}
+
+const SkeletonBlock = ({ className }: { className: string }) => (
+  <Skeleton startColor="bg-zinc-700" className={className} />
+);
+
+function EventDetailsSkeleton() {
+  return (
+    <VStack className="bg-zinc-800/40 p-5 rounded-2xl border border-zinc-700/50 gap-4">
+      {[0, 1, 2, 3].map((index) => (
+        <VStack key={index} className="gap-2">
+          <SkeletonBlock className="h-3 w-24 rounded-md" />
+          <SkeletonBlock className={`h-6 rounded-md ${index === 1 ? 'w-40' : index === 2 ? 'w-56' : 'w-32'}`} />
+          {index < 3 && <View className="h-px bg-zinc-700/50 w-full mt-2" />}
+        </VStack>
+      ))}
+    </VStack>
+  );
+}
+
+function PollCardSkeleton({ compact = false }: { compact?: boolean }) {
+  return (
+    <VStack className={`bg-zinc-800 rounded-xl border border-zinc-700 ${compact ? 'p-4 gap-3' : 'p-5 gap-4'}`}>
+      <HStack className="justify-between items-start gap-4">
+        <VStack className="flex-1 gap-2">
+          <SkeletonBlock className="h-6 w-3/4 rounded-md" />
+          <SkeletonBlock className="h-4 w-28 rounded-md" />
+        </VStack>
+        <SkeletonBlock className="h-8 w-8 rounded-full" />
+      </HStack>
+      <VStack className="gap-3">
+        <SkeletonBlock className="h-12 w-full rounded-xl" />
+        <SkeletonBlock className="h-12 w-full rounded-xl" />
+        {!compact && <SkeletonBlock className="h-12 w-2/3 rounded-xl" />}
+      </VStack>
+    </VStack>
+  );
+}
+
+function PollListSkeleton() {
+  return (
+    <VStack className="gap-4">
+      <PollCardSkeleton />
+      <PollCardSkeleton />
+    </VStack>
+  );
 }
 
 function AvailabilityPollCard({
@@ -942,6 +1229,7 @@ function AvailabilityPollCard({
   eventEnded,
   isOrganizer,
   onDelete,
+  onActionPress,
   onOpenAvailability,
   onResolveTie,
 }: AvailabilityPollCardProps) {
@@ -953,7 +1241,6 @@ function AvailabilityPollCard({
   const dateKeys = isDateStage
     ? (Array.isArray(poll.availableDateKeys) ? [...poll.availableDateKeys].sort() : [])
     : (Array.isArray(poll.selectedDates) ? [...poll.selectedDates].sort() : []);
-  const counts = getAvailabilityCounts(poll);
   const currentSelections = getCurrentUserAvailability(poll, currentUid);
   const participantCount = Object.keys(poll.availabilityByUser || {}).filter((uid) =>
     Array.isArray(poll.availabilityByUser?.[uid]) && poll.availabilityByUser[uid].length > 0
@@ -961,17 +1248,6 @@ function AvailabilityPollCard({
   const topSlots = getTopAvailabilitySlots(poll, 3);
   const topDates = getTopAvailabilityDates(poll, 3);
   const promotedDates = Array.isArray(poll.winningDateKeys) ? poll.winningDateKeys : [];
-  const { startHour, endHour } = getAvailabilityHourBounds(poll);
-  const shouldShowGrid = !isDateStage && (currentSelections.length > 0 || eventEnded || isEnded || isAwaitingSelection || showResults);
-  const cardLabel = isDateStage ? 'Date Availability' : 'Time Availability';
-  const statusText = isAwaitingSelection
-    ? 'Organizer choosing winner'
-    : isEnded
-      ? 'Ended'
-      : isDateStage
-        ? 'Collecting dates'
-        : 'Collecting times';
-
   return (
     <VStack className={`bg-zinc-800 rounded-xl border border-zinc-700 ${compact ? 'p-4 gap-3' : 'p-5 gap-4'}`}>
       <HStack className="justify-between items-start gap-3">
@@ -979,20 +1255,15 @@ function AvailabilityPollCard({
           <Text className={`text-zinc-50 font-bold ${compact ? 'text-lg leading-tight' : 'text-xl'}`}>
             {poll.question}
           </Text>
-          <Text className="text-emerald-300 text-xs font-semibold uppercase tracking-wider">
-            {cardLabel}
-          </Text>
-          <Text className="text-zinc-500 text-[11px] font-semibold uppercase tracking-wider">
-            {statusText}
-          </Text>
         </VStack>
 
-        {isOrganizer && !eventEnded && isActive && (
+        {isOrganizer && onActionPress && (
           <TouchableOpacity
-            onPress={() => onDelete(poll)}
-            className="bg-red-900/30 border border-red-800/50 rounded-lg px-3 py-1 active:bg-red-900/60"
+            onPress={() => onActionPress(poll)}
+            className="w-8 h-8 rounded-full bg-zinc-900/50 items-center justify-center border border-zinc-700/50 shrink-0 active:bg-zinc-700/50"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
-            <Text className="text-red-400 text-xs font-semibold">Delete</Text>
+            <MoreVertical size={16} color="#a1a1aa" />
           </TouchableOpacity>
         )}
       </HStack>
@@ -1084,49 +1355,6 @@ function AvailabilityPollCard({
           </VStack>
         )}
 
-        {shouldShowGrid && dateKeys.length > 0 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <VStack className="gap-2 pb-1">
-              <HStack className="gap-2">
-                <View style={{ width: 70 }} />
-                {dateKeys.map((dateKey) => (
-                  <View key={dateKey} className="bg-zinc-900/70 rounded-lg border border-zinc-700 py-2 items-center" style={{ width: 96 }}>
-                    <Text className="text-zinc-200 text-xs font-semibold">{formatDateLabel(dateKey)}</Text>
-                  </View>
-                ))}
-              </HStack>
-
-              {Array.from({ length: Math.max(endHour - startHour, 0) }).map((_, idx) => {
-                const hour = startHour + idx;
-
-                return (
-                  <HStack key={hour} className="gap-2 items-center">
-                    <View style={{ width: 70 }} className="items-end pr-2">
-                      <Text className="text-zinc-500 text-[11px]">{formatHourLabel(hour)}</Text>
-                    </View>
-                    {dateKeys.map((dateKey) => {
-                      const slotKey = `${dateKey}|${hour}`;
-                      const count = counts[slotKey] || 0;
-                      const selected = currentSelections.includes(slotKey);
-
-                      return (
-                        <View
-                          key={slotKey}
-                          className={`rounded-lg border items-center justify-center ${selected ? 'bg-emerald-600/70 border-emerald-500' : count > 0 ? 'bg-emerald-600/35 border-emerald-500/40' : 'bg-zinc-900/50 border-zinc-700'}`}
-                          style={{ width: 96, height: 28 }}
-                        >
-                          <Text className={`text-[11px] font-semibold ${selected ? 'text-white' : count > 0 ? 'text-emerald-100' : 'text-zinc-600'}`}>
-                            {count > 0 ? count : ''}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                  </HStack>
-                );
-              })}
-            </VStack>
-          </ScrollView>
-        )}
       </VStack>
     </VStack>
   );
@@ -1161,6 +1389,7 @@ export default function EventScreen() {
   const [eventData, setEventData] = useState<any>(initialEventData);
   const [polls, setPolls] = useState<any[]>([]);
   const [loading, setLoading] = useState(!initialEventData);
+  const [pollsLoading, setPollsLoading] = useState(true);
   const [isOrganizer, setIsOrganizer] = useState(initialEventData?.organizerId === currentUid);
 
   const [activeTab, setActiveTab] = useState<EventTab>('details');
@@ -1168,6 +1397,8 @@ export default function EventScreen() {
   const [isTimePollModeModalOpen, setIsTimePollModeModalOpen] = useState(false);
   const [modalConfig, setModalConfig] = useState<PollModalConfig>(EMPTY_MODAL_CONFIG);
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
+  const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
+  const [isExactTimeModalOpen, setIsExactTimeModalOpen] = useState(false);
   const [isTimeAvailabilityModalOpen, setIsTimeAvailabilityModalOpen] = useState(false);
   const [availabilityPoll, setAvailabilityPoll] = useState<any>(null);
   const [isAvailabilityPickerOpen, setIsAvailabilityPickerOpen] = useState(false);
@@ -1179,6 +1410,7 @@ export default function EventScreen() {
   const availabilityFinalizingRef = useRef<Set<string>>(new Set());
   const modalConfigResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoEndingEventRef = useRef(false);
+  const joinCodeRepairingRef = useRef(false);
   const mobileTabOffset = useRef(new Animated.Value(0)).current;
   const [hasAccess, setHasAccess] = useState(false);
   const [mobileTabWidth, setMobileTabWidth] = useState(0);
@@ -1186,6 +1418,7 @@ export default function EventScreen() {
   const resultsViewStartedAtRef = useRef<number | null>(null);
   const postVoteRefreshTrackedRef = useRef(false);
 
+  const visibleJoinCode = eventData?.joinCode || '';
   const joinLink = buildJoinLink(eventData?.joinCode);
   const mobileTabIndex = MOBILE_EVENT_TABS.indexOf(activeTab);
   const resolvedMobileTabWidth = mobileTabWidth || Math.max(width - 32, 1);
@@ -1267,6 +1500,83 @@ export default function EventScreen() {
     setIsTimePollModeModalOpen(true);
   };
 
+  const openExactTimeModal = () => {
+    setIsExactTimeModalOpen(true);
+  };
+
+  const handleSetExactTime = async (dateKey: string, hour: number) => {
+    if (!id) return;
+
+    const scheduledAt = fromDateKey(dateKey);
+    scheduledAt.setHours(hour, 0, 0, 0);
+    const finalTime = formatDateTimeSlotLabel(dateKey, hour);
+
+    await updateDoc(doc(db, 'events', id as string), {
+      time: finalTime,
+      scheduledAt: scheduledAt.toISOString(),
+      status: 'voting',
+      endedAt: null,
+    });
+
+    trackEvent('event_exact_time_set', {
+      event_id: id as string,
+      date_key: dateKey,
+      hour,
+    });
+  };
+
+  const handleEndEvent = async () => {
+    if (!id || !isOrganizer || eventEnded) return;
+
+    try {
+      await updateDoc(doc(db, 'events', id as string), {
+        status: 'ended',
+        endedAt: serverTimestamp(),
+      });
+      trackEvent('event_ended_manual', { event_id: id as string, source: 'event_details' });
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-green-400 font-bold text-sm">Event Ended</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Voting is now closed for everyone.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+    } catch (error) {
+      console.error('Error ending event:', error);
+    }
+  };
+
+  const handleRestartEvent = async () => {
+    if (!id || !isOrganizer || !eventEnded) return;
+
+    try {
+      await updateDoc(doc(db, 'events', id as string), {
+        status: 'voting',
+        endedAt: null,
+        scheduledAt: null,
+      });
+      await ensureJoinCodeForEvent(id as string, eventData);
+      trackEvent('event_restarted_manual', { event_id: id as string, source: 'event_details' });
+      toast.show({
+        placement: "top",
+        render: ({ id: toastId }) => (
+          <Toast nativeID={toastId} className="bg-zinc-800 border border-green-500 mt-24 px-4 py-3 rounded-xl shadow-lg">
+            <VStack>
+              <ToastTitle className="text-green-400 font-bold text-sm">Event Restarted</ToastTitle>
+              <ToastDescription className="text-zinc-300 text-xs mt-0.5">Voting is open again.</ToastDescription>
+            </VStack>
+          </Toast>
+        ),
+      });
+    } catch (error) {
+      console.error('Error restarting event:', error);
+    }
+  };
+
   const createDateAvailabilityPoll = async () => {
     if (!id) return;
 
@@ -1305,10 +1615,14 @@ export default function EventScreen() {
     if (!id) return;
 
     const [dateKey, hourString] = slotKey.split('|');
-    const finalTime = formatDateTimeSlotLabel(dateKey, Number(hourString));
+    const finalHour = Number(hourString);
+    const finalTime = formatDateTimeSlotLabel(dateKey, finalHour);
+    const scheduledAt = fromDateKey(dateKey);
+    scheduledAt.setHours(finalHour, 0, 0, 0);
 
     await updateDoc(doc(db, 'events', id as string), {
       time: finalTime,
+      scheduledAt: scheduledAt.toISOString(),
     });
 
     await updateDoc(doc(db, 'events', id as string, 'polls', poll.id), {
@@ -1350,6 +1664,7 @@ export default function EventScreen() {
         title: eventData?.title ?? '',
         time: eventData?.time ?? '',
         location: eventData?.location ?? '',
+        joinCode: eventData?.joinCode ?? '',
         identityRequirement: eventData?.identityRequirement === 'linked_account' ? 'linked_account' : 'none',
         status: eventData?.status === 'ended' ? 'ended' : 'voting',
       },
@@ -1382,7 +1697,7 @@ export default function EventScreen() {
           </Toast>
         ),
       });
-      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}`);
+      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}&reason=linked_account_required`);
       return;
     }
 
@@ -1442,7 +1757,7 @@ export default function EventScreen() {
 
     try {
       const result = await Share.share({
-        message: `Join my event "${eventData?.title}" on Polled! Code: ${eventData?.joinCode}\n${joinLink}`,
+        message: `Join my event "${eventData?.title}" on Polled! Code: ${visibleJoinCode}\n${joinLink}`,
       });
 
       // Show a success toast if they actually completed the share action
@@ -1490,7 +1805,7 @@ export default function EventScreen() {
   };
 
   const handleCopyCode = async () => {
-    const codeToCopy = eventData?.joinCode || id;
+    const codeToCopy = visibleJoinCode;
     if (!codeToCopy) return;
 
     await Clipboard.setStringAsync(codeToCopy as string);
@@ -1512,6 +1827,7 @@ export default function EventScreen() {
   useEffect(() => {
     if (!id || !auth.currentUser) return;
 
+    setPollsLoading(true);
     let unsubscribeEvent: (() => void) | undefined;
     let unsubscribePolls: (() => void) | undefined;
     let unsubscribeParticipants: (() => void) | undefined;
@@ -1519,7 +1835,7 @@ export default function EventScreen() {
     const initializeEventAccess = async () => {
       try {
         const eventRef = doc(db, 'events', id as string);
-        const eventDoc = await getDoc(eventRef);
+        const eventDoc = await getDocFromServer(eventRef);
 
         if (!eventDoc.exists()) {
           setLoading(false);
@@ -1529,7 +1845,7 @@ export default function EventScreen() {
 
         const event = eventDoc.data();
         const currentUid = auth.currentUser?.uid;
-        const userDoc = currentUid ? await getDoc(doc(db, 'users', currentUid)) : null;
+        const userDoc = currentUid ? await getDocFromServer(doc(db, 'users', currentUid)) : null;
         const joinedEvents = userDoc?.exists() ? (userDoc.data().joinedEvents || []) : [];
         const userHasAccess = event.organizerId === currentUid || joinedEvents.includes(id as string);
 
@@ -1566,6 +1882,14 @@ export default function EventScreen() {
             }
 
             autoEndingEventRef.current = false;
+            if (data.organizerId === auth.currentUser?.uid && !data.joinCode && !joinCodeRepairingRef.current) {
+              joinCodeRepairingRef.current = true;
+              void ensureJoinCodeForEvent(id as string, data).catch((error) => {
+                console.error('Error repairing event join code:', error);
+              }).finally(() => {
+                joinCodeRepairingRef.current = false;
+              });
+            }
             setEventData(data);
           }
           setLoading(false);
@@ -1575,6 +1899,7 @@ export default function EventScreen() {
         const q = query(pollsRef, orderBy('createdAt', 'desc'));
         unsubscribePolls = onSnapshot(q, (snapshot) => {
           setPolls(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+          setPollsLoading(false);
         });
 
         const membersQuery = query(collection(db, 'events', id as string, 'members'));
@@ -1587,6 +1912,7 @@ export default function EventScreen() {
       } catch (error) {
         console.error('Error checking event access:', error);
         setLoading(false);
+        setPollsLoading(false);
         router.replace('/dashboard');
       }
     };
@@ -1704,9 +2030,12 @@ export default function EventScreen() {
     if (tiedWinningSlots.length === 1) {
       const finalSlot = tiedWinningSlots[0];
       const finalTime = formatDateTimeSlotLabel(finalSlot.dateKey, finalSlot.hour);
+      const scheduledAt = fromDateKey(finalSlot.dateKey);
+      scheduledAt.setHours(finalSlot.hour, 0, 0, 0);
 
       await updateDoc(doc(db, 'events', id as string), {
         time: finalTime,
+        scheduledAt: scheduledAt.toISOString(),
       });
 
       await updateDoc(pollRef, {
@@ -1915,7 +2244,7 @@ export default function EventScreen() {
           </Toast>
         ),
       });
-      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}`);
+      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}&reason=linked_account_required`);
       return;
     }
     if (eventEnded) {
@@ -2276,7 +2605,7 @@ export default function EventScreen() {
           </Toast>
         ),
       });
-      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}`);
+      router.push(`/link-account?next=${encodeURIComponent(`/event/${id as string}`)}&reason=linked_account_required`);
       return;
     }
 
@@ -2456,6 +2785,9 @@ export default function EventScreen() {
 
   const renderDetailsTab = () => (
     <VStack className="gap-4 mt-1">
+      {loading && !eventData ? (
+        <EventDetailsSkeleton />
+      ) : (
       <VStack className="bg-zinc-800/40 p-5 rounded-2xl border border-zinc-700/50 gap-4">
         <VStack>
           <Text className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Status</Text>
@@ -2489,6 +2821,7 @@ export default function EventScreen() {
           </TouchableOpacity>
         </HStack>
       </VStack>
+      )}
 
       {isOrganizer && (
         <VStack className="gap-3">
@@ -2500,6 +2833,26 @@ export default function EventScreen() {
           >
             <ButtonText className="font-bold text-zinc-50">Edit Event Details</ButtonText>
           </Button>
+
+          {eventEnded ? (
+            <Button
+              size="xl"
+              variant="outline"
+              className="border-emerald-500/30 bg-emerald-500/10"
+              onPress={handleRestartEvent}
+            >
+              <ButtonText className="font-bold text-emerald-300">Restart Event</ButtonText>
+            </Button>
+          ) : (
+            <Button
+              size="xl"
+              variant="outline"
+              className="border-amber-500/30 bg-amber-500/10"
+              onPress={handleEndEvent}
+            >
+              <ButtonText className="font-bold text-amber-300">End Event</ButtonText>
+            </Button>
+          )}
         </VStack>
       )}
     </VStack>
@@ -2517,6 +2870,7 @@ export default function EventScreen() {
           eventEnded={eventEnded}
           isOrganizer={isOrganizer}
           onDelete={handleDeletePoll}
+          onActionPress={setActionPoll}
           onOpenAvailability={openAvailabilityPicker}
           onResolveTie={openTieBreaker}
         />
@@ -2555,6 +2909,9 @@ export default function EventScreen() {
   );
 
   const renderActiveTab = () => (
+    pollsLoading ? (
+      <PollListSkeleton />
+    ) :
     activePolls.length === 0 ? (
       <EmptyState message="You're all caught up!" />
     ) : (
@@ -2563,6 +2920,9 @@ export default function EventScreen() {
   );
 
   const renderAnsweredTab = () => (
+    pollsLoading ? (
+      <PollListSkeleton />
+    ) :
     answeredPolls.length === 0 ? (
       <EmptyState message="No answered polls yet." />
     ) : (
@@ -2636,7 +2996,9 @@ export default function EventScreen() {
                 </Heading>
                 <TouchableOpacity activeOpacity={0.7} onPress={handleCopyCode}>
                   <Box className="bg-zinc-800 px-3 py-1.5 rounded-lg border border-zinc-700">
-                    <Text className="text-zinc-300 font-mono text-sm font-bold tracking-widest">Join Code: {eventData?.joinCode || id}</Text>
+                    <Text className="text-zinc-300 font-mono text-sm font-bold tracking-widest">
+                      {visibleJoinCode ? `Join Code: ${visibleJoinCode}` : 'Join code repairing...'}
+                    </Text>
                   </Box>
                 </TouchableOpacity>
               </HStack>
@@ -2650,9 +3012,16 @@ export default function EventScreen() {
                   <QrCode size={16} color="#f4f4f5" />
                   <ButtonText className="text-zinc-50 font-bold">QR Code</ButtonText>
                 </Button>
+                <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={() => {
+                  trackEvent('calendar_modal_opened', { event_id: id as string });
+                  setIsCalendarModalOpen(true);
+                }}>
+                  <CalendarPlus size={16} color="#f4f4f5" />
+                  <ButtonText className="text-zinc-50 font-bold">Calendar</ButtonText>
+                </Button>
                 <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={handleNativeShare}>
                   <ShareIcon size={16} color="#f4f4f5" />
-                  <ButtonText className="text-zinc-50 font-bold">Share Link</ButtonText>
+                  <ButtonText className="text-zinc-50 font-bold">Share</ButtonText>
                 </Button>
               </HStack>
             </VStack>
@@ -2677,7 +3046,12 @@ export default function EventScreen() {
 
             {/* --- TAB CONTENT --- */}
             {isMobileWeb ? (
-              <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+              <ScrollView
+                className="flex-1 poll-scrollbar"
+                showsVerticalScrollIndicator={activeTab !== 'details'}
+                indicatorStyle="white"
+                persistentScrollbar={activeTab !== 'details'}
+              >
                 <VStack className="gap-4 pb-12">
                   {renderMobileTabContent()}
                 </VStack>
@@ -2703,7 +3077,12 @@ export default function EventScreen() {
                   }}
                 >
                   <View style={{ width: resolvedMobileTabWidth, minWidth: resolvedMobileTabWidth, maxWidth: resolvedMobileTabWidth, flexShrink: 0 }}>
-                    <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                    <ScrollView
+                      className="flex-1 poll-scrollbar"
+                      showsVerticalScrollIndicator={true}
+                      indicatorStyle="white"
+                      persistentScrollbar
+                    >
                       <VStack className="gap-4 pb-12">
                         {renderDetailsTab()}
                       </VStack>
@@ -2711,7 +3090,12 @@ export default function EventScreen() {
                   </View>
 
                   <View style={{ width: resolvedMobileTabWidth, minWidth: resolvedMobileTabWidth, maxWidth: resolvedMobileTabWidth, flexShrink: 0 }}>
-                    <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+                    <ScrollView
+                      className="flex-1 poll-scrollbar"
+                      showsVerticalScrollIndicator={true}
+                      indicatorStyle="white"
+                      persistentScrollbar
+                    >
                       <VStack className="gap-4 pb-12">
                         {renderActiveTab()}
                       </VStack>
@@ -2739,9 +3123,16 @@ export default function EventScreen() {
                   renderCreateActions()
                 )}
               </HStack>
-              <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+              <ScrollView
+                className="flex-1 poll-scrollbar"
+                showsVerticalScrollIndicator={true}
+                indicatorStyle="white"
+                persistentScrollbar
+              >
                 <VStack className="gap-4 pb-12">
-                  {activePolls.length === 0 ? (
+                  {pollsLoading ? (
+                    <PollListSkeleton />
+                  ) : activePolls.length === 0 ? (
                     <EmptyState message="You're all caught up!" />
                   ) : (
                     activePolls.map((poll) => renderPollItem(poll))
@@ -2757,9 +3148,16 @@ export default function EventScreen() {
                 </View>
                 <View style={{ height: 36 }} />
               </HStack>
-              <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+              <ScrollView
+                className="flex-1 poll-scrollbar"
+                showsVerticalScrollIndicator={true}
+                indicatorStyle="white"
+                persistentScrollbar
+              >
                 <VStack className="gap-4 pb-12">
-                  {answeredPolls.length === 0 ? (
+                  {pollsLoading ? (
+                    <PollListSkeleton />
+                  ) : answeredPolls.length === 0 ? (
                     <EmptyState message="No answered polls yet." />
                   ) : (
                     answeredPolls.map((poll) => renderPollItem(poll, true))
@@ -2772,6 +3170,18 @@ export default function EventScreen() {
       </View>
 
       <QRModal visible={isQRModalOpen} onClose={() => setIsQRModalOpen(false)} eventData={eventData} joinLink={joinLink} />
+      <CalendarModal
+        visible={isCalendarModalOpen}
+        eventData={eventData}
+        joinLink={joinLink}
+        onClose={() => setIsCalendarModalOpen(false)}
+        onSelect={(provider) => {
+          trackEvent('calendar_add_started', {
+            event_id: id as string,
+            provider,
+          });
+        }}
+      />
       <PollModal
         visible={isModalOpen}
         eventId={id as string}
@@ -2794,8 +3204,13 @@ export default function EventScreen() {
         }}
         onChooseManual={() => {
           setIsTimePollModeModalOpen(false);
-          openEditEvent();
+          openExactTimeModal();
         }}
+      />
+      <ExactTimeModal
+        visible={isExactTimeModalOpen}
+        onClose={() => setIsExactTimeModalOpen(false)}
+        onSave={handleSetExactTime}
       />
       <TimeAvailabilityModal visible={isTimeAvailabilityModalOpen} eventId={id as string} onClose={() => setIsTimeAvailabilityModalOpen(false)} />
       <DateAvailabilityPickerModal

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Modal, View, TouchableOpacity } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, Modal, View, TouchableOpacity, Linking } from 'react-native';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { HStack } from '@/components/ui/hstack';
@@ -12,8 +12,10 @@ import { useRouter } from 'expo-router';
 import { updateProfile, signOut } from 'firebase/auth';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../config/firebaseConfig';
-import { Pencil } from 'lucide-react-native';
+import { HeartHandshake, Pencil } from 'lucide-react-native';
 import { trackEvent } from '@/utils/analytics';
+
+const DONATION_URL = 'https://ko-fi.com/kevinlin121703';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -106,6 +108,16 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleDonate = async () => {
+    try {
+      trackEvent('donate_opened', { source: 'settings' });
+      await Linking.openURL(DONATION_URL);
+    } catch (error) {
+      console.error('Error opening donation page:', error);
+      Alert.alert('Error', 'Could not open the donation page. Try again later.');
+    }
+  };
+
   return (
     <Box className="flex-1 bg-zinc-900 px-6 pt-4">
       <VStack className="gap-8 w-full max-w-sm self-center">
@@ -171,6 +183,16 @@ export default function SettingsScreen() {
               <ButtonText className="font-bold text-zinc-50">Link Email or Google</ButtonText>
             </Button>
           )}
+
+          <Button
+            size="xl"
+            variant="outline"
+            className="border-blue-500/30 bg-blue-500/10 mt-2 gap-2"
+            onPress={handleDonate}
+          >
+            <HeartHandshake size={18} color="#93c5fd" />
+            <ButtonText className="font-bold text-blue-200">Donate</ButtonText>
+          </Button>
 
           <Button 
             size="xl" 

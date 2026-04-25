@@ -4,7 +4,6 @@ import { app, auth } from '@/config/firebaseConfig';
 import { analyticsConfig } from '@/config/env';
 
 type AnalyticsParams = Record<string, string | number | boolean | null | undefined>;
-type GtagFunction = (...args: any[]) => void;
 type StoredAnalyticsRecord = {
   id: string;
   name: string;
@@ -21,7 +20,6 @@ type StoredJourney = {
 };
 
 let analyticsPromise: Promise<any | null> | null = null;
-let debugModeConfigured = false;
 let persistQueue: Promise<void> = Promise.resolve();
 
 const LOCAL_ANALYTICS_STORAGE_KEY = 'polled_local_analytics_events';
@@ -29,21 +27,6 @@ const MAX_LOCAL_ANALYTICS_EVENTS = 500;
 const JOURNEY_STORAGE_PREFIX = 'polled_analytics_journey:';
 const FLAG_STORAGE_PREFIX = 'polled_analytics_flag:';
 const COUNTER_STORAGE_PREFIX = 'polled_analytics_counter:';
-
-const isDebugAnalyticsEnabled = () => {
-  if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
-
-  try {
-    const hostname = window.location.hostname;
-    return (
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      window.localStorage.getItem('polled_analytics_debug') === '1'
-    );
-  } catch {
-    return false;
-  }
-};
 
 const sanitizeParams = (params: AnalyticsParams = {}) =>
   Object.fromEntries(
@@ -53,24 +36,6 @@ const sanitizeParams = (params: AnalyticsParams = {}) =>
       return [[key, value]];
     })
   ) as Record<string, string | number>;
-
-const enableDebugModeIfNeeded = () => {
-  if (!isDebugAnalyticsEnabled() || debugModeConfigured || typeof window === 'undefined') {
-    return;
-  }
-
-  const measurementId = app.options.measurementId;
-  const gtag = (window as Window & { gtag?: GtagFunction }).gtag;
-
-  if (!measurementId || typeof gtag !== 'function') {
-    return;
-  }
-
-  // Configure GA's actual debug mode on the web runtime, not just a custom event param.
-  gtag('set', { debug_mode: true });
-  gtag('config', measurementId, { debug_mode: true });
-  debugModeConfigured = true;
-};
 
 const getAnalyticsInstance = async () => {
   if (Platform.OS !== 'web') return null;
@@ -82,7 +47,6 @@ const getAnalyticsInstance = async () => {
         if (!supported) return null;
 
         const analytics = getAnalytics(app);
-        enableDebugModeIfNeeded();
         return analytics;
       })
       .catch((error) => {
@@ -202,19 +166,12 @@ const buildAnalyticsRecord = (
   failureReason,
 });
 
-const logDebugAnalytics = (name: string, params: Record<string, string | number>, kind: StoredAnalyticsRecord['kind']) => {
-  if (!isDebugAnalyticsEnabled()) return;
-  console.info('[analytics]', kind, name, params);
-};
-
 const recordAnalytics = async (
   kind: StoredAnalyticsRecord['kind'],
   name: string,
   params: AnalyticsParams = {}
 ) => {
   const finalParams = sanitizeParams(params);
-
-  logDebugAnalytics(name, finalParams, kind);
 
   try {
     const serverDelivery = await sendAnalyticsToServer(kind, name, finalParams);

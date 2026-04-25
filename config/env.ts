@@ -3,22 +3,17 @@ const GOOGLE_ENV_KEYS = {
   iosClientId: 'EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID',
   androidClientId: 'EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID',
 } as const;
-const ANALYTICS_ENV_KEYS = {
-  ingestUrl: 'EXPO_PUBLIC_ANALYTICS_INGEST_URL',
-} as const;
 
 type GoogleAuthConfig = Record<keyof typeof GOOGLE_ENV_KEYS, string>;
 
-const readEnv = (key: string) => process.env[key]?.trim() ?? '';
-
 export const googleAuthConfig: GoogleAuthConfig = {
-  webClientId: readEnv(GOOGLE_ENV_KEYS.webClientId),
-  iosClientId: readEnv(GOOGLE_ENV_KEYS.iosClientId),
-  androidClientId: readEnv(GOOGLE_ENV_KEYS.androidClientId),
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() ?? '',
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID?.trim() ?? '',
+  androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID?.trim() ?? '',
 };
 
 export const analyticsConfig = {
-  ingestUrl: readEnv(ANALYTICS_ENV_KEYS.ingestUrl),
+  ingestUrl: process.env.EXPO_PUBLIC_ANALYTICS_INGEST_URL?.trim() ?? '',
 };
 
 export const hasGoogleAuthConfig = Object.values(googleAuthConfig).every(Boolean);
