@@ -3014,7 +3014,7 @@ export default function EventScreen() {
                   setIsQRModalOpen(true);
                 }}>
                   <QrCode size={16} color="#f4f4f5" />
-                  <ButtonText className="text-zinc-50 font-bold">QR Code</ButtonText>
+                  <ButtonText className="text-zinc-50 font-bold">QR</ButtonText>
                 </Button>
                 <Button size="sm" variant="outline" className="flex-1 border-zinc-600 gap-2" onPress={() => {
                   trackEvent('calendar_modal_opened', { event_id: id as string });

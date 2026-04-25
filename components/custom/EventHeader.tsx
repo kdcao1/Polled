@@ -176,7 +176,7 @@ export default function EventHeader({ eventData, headcount, isMobile, isOrganize
              </TouchableOpacity>
              
              <TouchableOpacity onPress={onShowQR} className="flex-row items-center gap-1.5 active:opacity-70">
-               <Text className="text-blue-400 font-semibold text-sm">Show QR Code</Text>
+               <Text className="text-blue-400 font-semibold text-sm">Show QR</Text>
              </TouchableOpacity>
 
              <TouchableOpacity onPress={() => setIsCalendarModalOpen(true)} className="flex-row items-center gap-1.5 active:opacity-70">
