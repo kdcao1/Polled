@@ -5,6 +5,13 @@ Polled is a real-time event coordination app built with **Expo**, **React Native
 
 https://polled.app
 Admin dashboard: https://admin.polled.app
+
+Production analytics ingest is built with:
+`EXPO_PUBLIC_ANALYTICS_INGEST_URL=https://analytics.polled.app/analytics`
+
+Route `https://analytics.polled.app/analytics` to the `polled-notification-worker`
+container on port `8787`. The worker does not need a public Docker port when the
+reverse proxy is on the same Docker network.
 ---
 
 ## Key Features
