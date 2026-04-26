@@ -14,6 +14,8 @@ import {
   fetchTrackedEventInventory,
   fetchRecentAnalyticsEvents,
   getAnalyticsSourceLabel,
+  analyticsRangeLabel,
+  normalizeAnalyticsRange,
 } from '@/lib/analytics';
 import { fetchMaintenanceState } from '@/lib/admin-data';
 import MetricCard from '@/components/MetricCard';
@@ -30,35 +32,44 @@ import ActionAnalyticsTable from '@/components/ActionAnalyticsTable';
 import TimeAnalyticsTable from '@/components/TimeAnalyticsTable';
 import TrackedEventsTable from '@/components/TrackedEventsTable';
 import RecentAnalyticsEventsTable from '@/components/RecentAnalyticsEventsTable';
+import AnalyticsRangeTabs from '@/components/AnalyticsRangeTabs';
 import { requireAdminSession } from '@/lib/admin-auth';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export default async function AdminPage() {
+type AdminPageProps = {
+  searchParams?: {
+    range?: string;
+  };
+};
+
+export default async function AdminPage({ searchParams }: AdminPageProps) {
   requireAdminSession();
+  const selectedRange = normalizeAnalyticsRange(searchParams?.range);
+  const selectedRangeLabel = analyticsRangeLabel(selectedRange);
   let overview, dailyUsers, topEvents, topScreens, userType, platforms,
       dauComparison, day1Retention, userActivity, actionAnalytics,
       timeAnalytics, ingestStatus, maintenanceState, trackedEvents,
       recentAnalyticsEvents;
-  const sourceLabel = getAnalyticsSourceLabel();
+  const sourceLabel = selectedRange === '28d' ? getAnalyticsSourceLabel() : 'Local SQLite analytics';
 
   try {
-    overview        = await fetchOverview();
+    overview        = await fetchOverview(selectedRange);
     dailyUsers      = await fetchDailyUsers();
-    topEvents       = await fetchTopEvents();
-    topScreens      = await fetchTopScreens();
-    userType        = await fetchUserType();
-    platforms       = await fetchPlatforms();
+    topEvents       = await fetchTopEvents(selectedRange);
+    topScreens      = await fetchTopScreens(selectedRange);
+    userType        = await fetchUserType(selectedRange);
+    platforms       = await fetchPlatforms(selectedRange);
     dauComparison   = await fetchDAUComparison();
     day1Retention   = await fetchDay1Retention();
     userActivity    = await fetchUserActivityOverTime();
-    actionAnalytics = await fetchActionAnalytics();
-    timeAnalytics   = await fetchTimeAnalytics();
+    actionAnalytics = await fetchActionAnalytics(selectedRange);
+    timeAnalytics   = await fetchTimeAnalytics(selectedRange);
     ingestStatus    = await fetchAnalyticsIngestStatus();
     maintenanceState = await fetchMaintenanceState();
-    trackedEvents   = await fetchTrackedEventInventory();
-    recentAnalyticsEvents = await fetchRecentAnalyticsEvents();
+    trackedEvents   = await fetchTrackedEventInventory(selectedRange);
+    recentAnalyticsEvents = await fetchRecentAnalyticsEvents(60, selectedRange);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return (
@@ -81,11 +92,12 @@ export default async function AdminPage() {
   return (
     <AdminShell active="analytics" sourceLabel={sourceLabel}>
       <SiteStatus maintenance={maintenanceState} analytics={ingestStatus} />
+      <AnalyticsRangeTabs activeRange={selectedRange} />
 
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-        <MetricCard label="Active Users (28d)" value={overview.activeUsers} />
-        <MetricCard label="New Users (28d)"   value={overview.newUsers} />
+        <MetricCard label={`Active Users (${selectedRangeLabel})`} value={overview.activeUsers} />
+        <MetricCard label={`New Users (${selectedRangeLabel})`} value={overview.newUsers} />
         <MetricCard label="Event Joins"       value={overview.sessions} />
         <MetricCard label="Total Polls"       value={overview.screenPageViews} />
         <MetricCard label="Total Events"      value={overview.eventCount} />

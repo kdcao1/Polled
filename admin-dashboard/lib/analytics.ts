@@ -46,6 +46,15 @@ export type AnalyticsIngestStatus = {
   lastEventAt: string | null;
 };
 
+export const ANALYTICS_RANGES = [
+  { key: '28d', label: '28 days' },
+  { key: 'today', label: 'Today' },
+  { key: '3h', label: '3 hours' },
+  { key: '1h', label: '1 hour' },
+] as const;
+
+export type AnalyticsRangeKey = typeof ANALYTICS_RANGES[number]['key'];
+
 type AnalyticsRow = {
   uid: string | null;
   auth_provider: string | null;
@@ -210,6 +219,14 @@ function uniqueUids(rows: AnalyticsRow[]) {
   return new Set(rows.map((row) => row.uid).filter((uid): uid is string => Boolean(uid)));
 }
 
+export function normalizeAnalyticsRange(value: unknown): AnalyticsRangeKey {
+  return ANALYTICS_RANGES.some((range) => range.key === value) ? value as AnalyticsRangeKey : '28d';
+}
+
+export function analyticsRangeLabel(range: AnalyticsRangeKey) {
+  return ANALYTICS_RANGES.find((option) => option.key === range)?.label ?? '28 days';
+}
+
 async function getAllUsers(): Promise<AdminAuth.UserRecord[]> {
   const auth = getAdminAuth();
   const users: AdminAuth.UserRecord[] = [];
@@ -243,6 +260,18 @@ function startOfDay(daysAgo: number): Date {
   return d;
 }
 
+function analyticsRangeStart(range: AnalyticsRangeKey): Date {
+  const now = new Date();
+  if (range === '1h') return new Date(now.getTime() - 60 * 60 * 1000);
+  if (range === '3h') return new Date(now.getTime() - 3 * 60 * 60 * 1000);
+  if (range === 'today') {
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    return today;
+  }
+  return startOfDay(28);
+}
+
 function dateRangeKeys(days: number) {
   return Array.from({ length: days }, (_, index) => {
     const d = startOfDay(days - 1 - index);
@@ -252,6 +281,14 @@ function dateRangeKeys(days: number) {
 
 function localRowsSince(daysAgo: number) {
   const cutoff = startOfDay(daysAgo);
+  return getLocalRows().filter((row) => {
+    const date = rowDate(row);
+    return date && date >= cutoff;
+  });
+}
+
+function localRowsForRange(range: AnalyticsRangeKey) {
+  const cutoff = analyticsRangeStart(range);
   return getLocalRows().filter((row) => {
     const date = rowDate(row);
     return date && date >= cutoff;
@@ -288,8 +325,8 @@ async function fetchFirebaseOverview(): Promise<Overview> {
   };
 }
 
-function fetchLocalOverview(): Overview {
-  const rows = localRowsSince(28);
+function fetchLocalOverview(range: AnalyticsRangeKey = '28d'): Overview {
+  const rows = localRowsForRange(range);
   const allRows = getLocalRows();
   const firstSeenByUid = new Map<string, Date>();
 
@@ -301,11 +338,11 @@ function fetchLocalOverview(): Overview {
     if (!existing || date < existing) firstSeenByUid.set(row.uid, date);
   }
 
-  const cutoff28 = startOfDay(28);
+  const cutoff = analyticsRangeStart(range);
 
   return {
     activeUsers: uniqueUids(rows).size,
-    newUsers: Array.from(firstSeenByUid.values()).filter((date) => date >= cutoff28).length,
+    newUsers: Array.from(firstSeenByUid.values()).filter((date) => date >= cutoff).length,
     sessions: rows.filter((row) => row.name === 'event_joined').length,
     screenPageViews: rows.filter((row) => row.kind === 'screen_view').length,
     eventCount: new Set(rows.map(rowEventId).filter(Boolean)).size,
@@ -370,10 +407,10 @@ async function fetchFirebaseTopEvents(): Promise<TopEventPoint[]> {
     .map(([id, count]) => ({ event: titleMap[id] ?? id, count }));
 }
 
-function fetchLocalTopEvents(): TopEventPoint[] {
+function fetchLocalTopEvents(range: AnalyticsRangeKey = '28d'): TopEventPoint[] {
   const counts: Record<string, number> = {};
 
-  for (const row of localRowsSince(28)) {
+  for (const row of localRowsForRange(range)) {
     const eventId = rowEventId(row);
     if (!eventId) continue;
     counts[eventId] = (counts[eventId] ?? 0) + 1;
@@ -418,10 +455,10 @@ async function fetchFirebaseTopScreens(): Promise<TopScreenPoint[]> {
     }));
 }
 
-function fetchLocalTopScreens(): TopScreenPoint[] {
+function fetchLocalTopScreens(range: AnalyticsRangeKey = '28d'): TopScreenPoint[] {
   const counts: Record<string, { views: number; users: Set<string> }> = {};
 
-  for (const row of localRowsSince(28)) {
+  for (const row of localRowsForRange(range)) {
     if (row.kind !== 'screen_view') continue;
     const params = parseParams(row);
     const rawScreen = params.firebase_screen;
@@ -453,10 +490,10 @@ async function fetchFirebaseUserType(): Promise<UserTypePoint[]> {
   ];
 }
 
-function fetchLocalUserType(): UserTypePoint[] {
+function fetchLocalUserType(range: AnalyticsRangeKey = '28d'): UserTypePoint[] {
   const rows = getLocalRows();
   const firstSeenByUid = new Map<string, Date>();
-  const seenInLast28 = uniqueUids(localRowsSince(28));
+  const seenInRange = uniqueUids(localRowsForRange(range));
 
   for (const row of rows) {
     if (!row.uid) continue;
@@ -466,14 +503,14 @@ function fetchLocalUserType(): UserTypePoint[] {
     if (!existing || date < existing) firstSeenByUid.set(row.uid, date);
   }
 
-  const cutoff28 = startOfDay(28);
+  const cutoff = analyticsRangeStart(range);
   const newCount = Array.from(firstSeenByUid.entries()).filter(
-    ([uid, date]) => seenInLast28.has(uid) && date >= cutoff28
+    ([uid, date]) => seenInRange.has(uid) && date >= cutoff
   ).length;
 
   return [
     { type: 'new', users: newCount },
-    { type: 'returning', users: Math.max(0, seenInLast28.size - newCount) },
+    { type: 'returning', users: Math.max(0, seenInRange.size - newCount) },
   ];
 }
 
@@ -495,10 +532,10 @@ async function fetchFirebasePlatforms(): Promise<PlatformPoint[]> {
     .map(([platform, users]) => ({ platform, users }));
 }
 
-function fetchLocalPlatforms(): PlatformPoint[] {
+function fetchLocalPlatforms(range: AnalyticsRangeKey = '28d'): PlatformPoint[] {
   const counts: Record<string, Set<string>> = {};
 
-  for (const row of localRowsSince(28)) {
+  for (const row of localRowsForRange(range)) {
     const platform = row.platform || 'unknown';
     counts[platform] = counts[platform] ?? new Set<string>();
     if (row.uid) counts[platform].add(row.uid);
@@ -667,28 +704,28 @@ function fetchLocalDay1Retention(): RetentionComparison {
   return { thisWeek: emptyWeek, lastWeek: previousWeek };
 }
 
-export async function fetchOverview() {
-  return hasFirebaseAdminKey() ? fetchFirebaseOverview() : fetchLocalOverview();
+export async function fetchOverview(range: AnalyticsRangeKey = '28d') {
+  return hasFirebaseAdminKey() && range === '28d' ? fetchFirebaseOverview() : fetchLocalOverview(range);
 }
 
 export async function fetchDailyUsers() {
   return hasFirebaseAdminKey() ? fetchFirebaseDailyUsers() : fetchLocalDailyUsers();
 }
 
-export async function fetchTopEvents() {
-  return hasFirebaseAdminKey() ? fetchFirebaseTopEvents() : fetchLocalTopEvents();
+export async function fetchTopEvents(range: AnalyticsRangeKey = '28d') {
+  return hasFirebaseAdminKey() && range === '28d' ? fetchFirebaseTopEvents() : fetchLocalTopEvents(range);
 }
 
-export async function fetchTopScreens() {
-  return hasFirebaseAdminKey() ? fetchFirebaseTopScreens() : fetchLocalTopScreens();
+export async function fetchTopScreens(range: AnalyticsRangeKey = '28d') {
+  return hasFirebaseAdminKey() && range === '28d' ? fetchFirebaseTopScreens() : fetchLocalTopScreens(range);
 }
 
-export async function fetchUserType() {
-  return hasFirebaseAdminKey() ? fetchFirebaseUserType() : fetchLocalUserType();
+export async function fetchUserType(range: AnalyticsRangeKey = '28d') {
+  return hasFirebaseAdminKey() && range === '28d' ? fetchFirebaseUserType() : fetchLocalUserType(range);
 }
 
-export async function fetchPlatforms() {
-  return hasFirebaseAdminKey() ? fetchFirebasePlatforms() : fetchLocalPlatforms();
+export async function fetchPlatforms(range: AnalyticsRangeKey = '28d') {
+  return hasFirebaseAdminKey() && range === '28d' ? fetchFirebasePlatforms() : fetchLocalPlatforms(range);
 }
 
 export async function fetchUserActivityOverTime() {
@@ -703,11 +740,11 @@ export async function fetchDay1Retention() {
   return hasFirebaseAdminKey() ? fetchFirebaseDay1Retention() : fetchLocalDay1Retention();
 }
 
-export async function fetchActionAnalytics(): Promise<ActionAnalyticsPoint[]> {
+export async function fetchActionAnalytics(range: AnalyticsRangeKey = '28d'): Promise<ActionAnalyticsPoint[]> {
   const ignored = new Set(['screen_view']);
   const counts = new Map<string, { count: number; users: Set<string> }>();
 
-  for (const row of localRowsSince(28)) {
+  for (const row of localRowsForRange(range)) {
     if (row.kind !== 'event' || ignored.has(row.name)) continue;
     const entry = counts.get(row.name) ?? { count: 0, users: new Set<string>() };
     entry.count += 1;
@@ -725,10 +762,10 @@ export async function fetchActionAnalytics(): Promise<ActionAnalyticsPoint[]> {
     }));
 }
 
-export async function fetchTimeAnalytics(): Promise<TimeAnalyticsPoint[]> {
+export async function fetchTimeAnalytics(range: AnalyticsRangeKey = '28d'): Promise<TimeAnalyticsPoint[]> {
   const samples = new Map<string, number[]>();
 
-  for (const row of localRowsSince(28)) {
+  for (const row of localRowsForRange(range)) {
     const params = parseParams(row);
     const seconds = numericParam(params, 'duration_seconds');
     if (seconds === null) continue;
@@ -776,8 +813,8 @@ export async function fetchAnalyticsIngestStatus(): Promise<AnalyticsIngestStatu
   };
 }
 
-export async function fetchTrackedEventInventory(): Promise<TrackedEventInventoryPoint[]> {
-  const rows = getLocalRows();
+export async function fetchTrackedEventInventory(range: AnalyticsRangeKey = '28d'): Promise<TrackedEventInventoryPoint[]> {
+  const rows = localRowsForRange(range);
   const observed = new Map<string, { count: number; lastSeenAt: string | null }>();
 
   for (const row of rows) {
@@ -804,8 +841,11 @@ export async function fetchTrackedEventInventory(): Promise<TrackedEventInventor
     .sort((a, b) => a.category.localeCompare(b.category) || a.label.localeCompare(b.label));
 }
 
-export async function fetchRecentAnalyticsEvents(limit = 60): Promise<RecentAnalyticsEvent[]> {
-  return getLocalRows()
+export async function fetchRecentAnalyticsEvents(
+  limit = 60,
+  range: AnalyticsRangeKey = '28d'
+): Promise<RecentAnalyticsEvent[]> {
+  return localRowsForRange(range)
     .slice(0, limit)
     .map((row) => ({
       name: row.name,
