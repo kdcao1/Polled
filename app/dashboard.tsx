@@ -40,6 +40,7 @@ export default function DashboardScreen() {
         id: event.id,
         title: event.title ?? '',
         time: event.time ?? '',
+        scheduledAt: event.scheduledAt ?? '',
         location: event.location ?? '',
         status: event.status ?? 'voting',
         joinCode: event.joinCode ?? '',

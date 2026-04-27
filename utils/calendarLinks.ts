@@ -62,12 +62,19 @@ export function buildGoogleCalendarUrl(input: CalendarEventInput) {
 }
 
 export function buildAppleCalendarUrl(input: CalendarEventInput) {
+  const ics = buildIcsContent(input);
+  if (!ics) return null;
+
+  return `data:text/calendar;charset=utf-8,${encodeURIComponent(ics)}`;
+}
+
+function buildIcsContent(input: CalendarEventInput) {
   const event = getCalendarEventDetails(input);
   if (!event) return null;
 
   const uid = `polled-${event.startsAt.getTime()}@polled.app`;
   const now = formatGoogleDate(new Date());
-  const ics = [
+  return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//Polled//Event Calendar//EN',
@@ -86,17 +93,38 @@ export function buildAppleCalendarUrl(input: CalendarEventInput) {
   ]
     .filter(Boolean)
     .join('\r\n');
-
-  return `data:text/calendar;charset=utf-8,${encodeURIComponent(ics)}`;
 }
 
 export async function openCalendarEvent(provider: CalendarProvider, input: CalendarEventInput) {
-  const url =
-    provider === 'google'
-      ? buildGoogleCalendarUrl(input)
-      : buildAppleCalendarUrl(input);
+  if (provider === 'apple' && Platform.OS !== 'web') {
+    const ics = buildIcsContent(input);
+    if (!ics) return false;
 
+    const FileSystem = await import('expo-file-system/legacy');
+    const Sharing = await import('expo-sharing');
+    const isSharingAvailable = await Sharing.isAvailableAsync();
+    if (!isSharingAvailable || !FileSystem.cacheDirectory) return false;
+
+    const fileUri = `${FileSystem.cacheDirectory}polled-event-${Date.now()}.ics`;
+    await FileSystem.writeAsStringAsync(fileUri, ics, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    await Sharing.shareAsync(fileUri, {
+      mimeType: 'text/calendar',
+      dialogTitle: 'Apple Calendar',
+      UTI: 'com.apple.ical.ics',
+    });
+    return true;
+  }
+
+  const url = provider === 'google' ? buildGoogleCalendarUrl(input) : buildAppleCalendarUrl(input);
   if (!url) return false;
+
+  if (provider === 'google' && Platform.OS !== 'web') {
+    const WebBrowser = await import('expo-web-browser');
+    await WebBrowser.openBrowserAsync(url);
+    return true;
+  }
 
   if (Platform.OS === 'web' && provider === 'apple' && typeof window !== 'undefined') {
     const link = document.createElement('a');

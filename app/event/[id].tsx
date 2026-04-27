@@ -1373,6 +1373,7 @@ export default function EventScreen() {
   const initialEventData =
     typeof params.title === 'string' ||
     typeof params.time === 'string' ||
+    typeof params.scheduledAt === 'string' ||
     typeof params.location === 'string' ||
     typeof params.status === 'string' ||
     typeof params.joinCode === 'string' ||
@@ -1380,6 +1381,7 @@ export default function EventScreen() {
       ? {
           title: typeof params.title === 'string' ? params.title : '',
           time: typeof params.time === 'string' ? params.time : '',
+          scheduledAt: typeof params.scheduledAt === 'string' ? params.scheduledAt : null,
           location: typeof params.location === 'string' ? params.location : '',
           status: params.status === 'ended' ? 'ended' : 'voting',
           joinCode: typeof params.joinCode === 'string' ? params.joinCode : undefined,
